@@ -14,7 +14,7 @@ void create_world(int p, int q, world_func func, void *arg) {
             int z = q * CHUNK_SIZE + dz;
             float f = simplex2(x * 0.01, z * 0.01, 4, 0.5, 2);
             float g = simplex2(-x * 0.01, -z * 0.01, 2, 0.9, 2);
-            int mh = g * 32 + 16;
+            int mh = g * 170 + 16;
             int h = f * mh;
             int w = 1;
             int t = 12;
