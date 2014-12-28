@@ -26,6 +26,10 @@
 #define SHOW_CHAT_TEXT 1
 #define SHOW_PLAYER_NAMES 1
 
+//player options
+#define FLY_SPEED 20
+#define WALK_SPEED 5
+
 // key bindings
 #define CRAFT_KEY_FORWARD 'W'
 #define CRAFT_KEY_BACKWARD 'S'

@@ -139,6 +139,8 @@ typedef struct {
     int scale;
     int ortho;
     float fov;
+    int fly_speed;
+    int walk_speed;
     int suppress_char;
     int mode;
     int mode_changed;
@@ -2024,7 +2026,7 @@ void parse_command(const char *buffer, int forward) {
     char server_addr[MAX_ADDR_LENGTH];
     int server_port = DEFAULT_PORT;
     char filename[MAX_PATH_LENGTH];
-    int radius, count, xc, yc, zc;
+    int radius, count, xc, yc, zc, speed;
     if (sscanf(buffer, "/identity %128s %128s", username, token) == 2) {
         db_auth_set(username, token);
         add_message("Successfully imported identity token!");
@@ -2071,6 +2073,18 @@ void parse_command(const char *buffer, int forward) {
         else {
             add_message("Viewing distance must be between 1 and 24.");
         }
+    }
+    else if (sscanf(buffer, "/flyspeed %d", &speed) == 1) {
+        if (speed > 0)
+            g->fly_speed = speed;
+        else
+            add_message("flyspeed must be > 0");
+    }
+    else if (sscanf(buffer, "/walkspeed %d", &speed) == 1) {
+        if (speed > 0)
+            g->walk_speed = speed;
+        else
+            add_message("walkspeed must be > 0");
     }
     else if (strcmp(buffer, "/copy") == 0) {
         copy();
@@ -2438,7 +2452,7 @@ void handle_movement(double dt) {
             }
         }
     }
-    float speed = g->flying ? 20 : 5;
+    float speed = g->flying ? g->fly_speed : g->walk_speed;
     int estimate = roundf(sqrtf(
         powf(vx * speed, 2) +
         powf(vy * speed + ABS(dy) * 2, 2) +
@@ -2715,6 +2729,9 @@ int main(int argc, char **argv) {
     g->render_radius = RENDER_CHUNK_RADIUS;
     g->delete_radius = DELETE_CHUNK_RADIUS;
     g->sign_radius = RENDER_SIGN_RADIUS;
+
+    g->fly_speed = FLY_SPEED;
+    g->walk_speed = WALK_SPEED;
 
     // INITIALIZE WORKER THREADS
     for (int i = 0; i < WORKERS; i++) {
