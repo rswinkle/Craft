@@ -2174,6 +2174,114 @@ void on_middle_click() {
     }
 }
 
+int handle_events()
+{
+	SDL_Event e;
+	int sc;
+	char title_buf[STRBUF_SZ];
+
+	// eat all escapes this frame after copy dialog ended with "no"
+	int copy_escape = 0;
+
+	g->status = NOCHANGE;
+
+	SDL_Keymod mod_state = SDL_GetModState();
+
+	int control = mod_state & (KMOD_LCTRL | KMOD_RCTRL | KMOD_LGUI | KMOD_RGUI);
+
+	int ticks = SDL_GetTicks();
+
+	while (SDL_PollEvent(&e)) {
+		if (e.type == g->userevent) {
+			// reset this everytime they interact with GUI
+			// so it doesn't disappear even if they're holding
+			// the mouse down but still (on zoom controls for example)
+			//g->gui_timer = SDL_GetTicks();
+
+			code = e.user.code;
+			switch (code) {
+			}
+		}
+		switch (e.type) {
+		case SDL_QUIT:
+			return 1;
+		case SDL_KEYDOWN:
+			sc = e.key.keysym.scancode;
+			switch (sc) {
+			case SDL_SCANCODE_ESCAPE:
+				// TODO typing
+				return 1;
+				break;
+			case SDL_SCANCODE_RETURN:
+				// typing
+				break;
+
+			case SDL_SCANCODE_V:
+				//paste
+				break;
+
+			case SDL_SCANCODE_1:
+				g->item_index = 9;
+				break;
+			case SDL_SCANCODE_1:
+			case SDL_SCANCODE_2:
+			case SDL_SCANCODE_3:
+			case SDL_SCANCODE_4:
+			case SDL_SCANCODE_5:
+			case SDL_SCANCODE_6:
+			case SDL_SCANCODE_7:
+			case SDL_SCANCODE_8:
+			case SDL_SCANCODE_9:
+				g->item_index = (sc - SDL_SCANCODE_0);
+				break;
+
+			case KEY_FLY:
+				g->flying
+				break;
+
+			case KEY_ITEM_NEXT:
+				g->item_index = (g->item_index + 1) % item_count;
+				break;
+			case KEY_ITEM_PREV:
+				g->item_next--;
+				if (g->item_next < 0)
+					g->item_index = item_count - 1;
+				break;
+			case KEY_OBSERVE:
+				g->observe1 = (g->observe1 + 1) % g->player_count;
+				break;
+
+			case KEY_OBSERVE_INSET:
+				g->observe2 = (g->observe2 + 1) % g->player_count;
+				break;
+
+			}
+
+			break;
+
+		case SDL_MOUSEBUTTONDOWN:
+			break;
+
+		case SDL_MOUSEWHEEL:
+			// TODO might have to change this to force 1 step
+			if (e.wheel.direction == SDL_MOUSEWHEEL_NORMAL) {
+				g->item_index += e.wheel.y;
+			} else {
+				g->item_index -= e.wheel.y;
+			}
+			if (g->item_index < 0)
+				g->item_index = item_count -1;
+			else
+				g->item_index %= item_count;
+			break;
+
+		}
+	}
+
+	return 0;
+
+}
+
 void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
     int control = mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER);
     int exclusive =
