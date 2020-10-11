@@ -127,7 +127,9 @@ typedef struct {
     Player players[MAX_PLAYERS];
     int player_count;
     int typing;
+    int exclusive;
     char typing_buffer[MAX_TEXT_LENGTH];
+    int text_len;
     int message_index;
     char messages[MAX_MESSAGES][MAX_TEXT_LENGTH];
     int width;
@@ -2177,8 +2179,8 @@ void on_middle_click() {
 int handle_events()
 {
 	SDL_Event e;
-	int sc;
-	char title_buf[STRBUF_SZ];
+	int sc, code;
+	char buffer[STRBUF_SZ];
 
 	// eat all escapes this frame after copy dialog ended with "no"
 	int copy_escape = 0;
@@ -2189,14 +2191,11 @@ int handle_events()
 
 	int control = mod_state & (KMOD_LCTRL | KMOD_RCTRL | KMOD_LGUI | KMOD_RGUI);
 
+
 	int ticks = SDL_GetTicks();
 
 	while (SDL_PollEvent(&e)) {
 		if (e.type == g->userevent) {
-			// reset this everytime they interact with GUI
-			// so it doesn't disappear even if they're holding
-			// the mouse down but still (on zoom controls for example)
-			//g->gui_timer = SDL_GetTicks();
 
 			code = e.user.code;
 			switch (code) {
@@ -2209,19 +2208,60 @@ int handle_events()
 			sc = e.key.keysym.scancode;
 			switch (sc) {
 			case SDL_SCANCODE_ESCAPE:
-				// TODO typing
+				if (g->typing) {
+					g->typing = 0;
+				} else if (exclusive) {
+					glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+				}
 				return 1;
 				break;
 			case SDL_SCANCODE_RETURN:
-				// typing
+				if (g->typing) {
+					if (mod_state & (KMOD_LSHIFT | KMOD_RSHIFT)) {
+						if (text_len < MAX_TEXT_LENGTH - 1) {
+							g->typing_buffer[text_len] = '\r'; // TODO? \n?
+							g->typing_buffer[text_len+1] = '\0';
+						}
+					} else {
+						g->typing = 0;
+						if (g->typing_buffer[0] == CRAFT_KEY_SIGN) {
+							Player *player = g->players;
+							int x, y, z, face;
+							if (hit_test_face(player, &x, &y, &z, &face)) {
+								set_sign(x, y, z, face, g->typing_buffer + 1);
+							}
+						} else if (g->typing_buffer[0] == '/') {
+							parse_command(g->typing_buffer, 1);
+						} else {
+							client_talk(g->typing_buffer);
+						}
+					}
+				} else {
+					if (control) {
+						on_right_click();
+					} else {
+						on_left_click();
+					}
+				}
 				break;
 
 			case SDL_SCANCODE_V:
-				//paste
+				if (control) {
+					buffer = SDL_GetClipboardText();
+					if (g->typing) {
+						g->suppress_char = 1;
+						strncat(g->typing_buffer, buffer,
+							MAX_TEXT_LENGTH - text_len - 1);
+					}
+					else {
+						parse_command(buffer, 0);
+					}
+				}
 				break;
 
-			case SDL_SCANCODE_1:
-				g->item_index = 9;
+			case SDL_SCANCODE_0:
+				if (!g->typing)
+					g->item_index = 9;
 				break;
 			case SDL_SCANCODE_1:
 			case SDL_SCANCODE_2:
@@ -2232,34 +2272,99 @@ int handle_events()
 			case SDL_SCANCODE_7:
 			case SDL_SCANCODE_8:
 			case SDL_SCANCODE_9:
-				g->item_index = (sc - SDL_SCANCODE_0);
+				if (!g->typing)
+					g->item_index = (sc - SDL_SCANCODE_1);
 				break;
 
 			case KEY_FLY:
-				g->flying
+				if (!g->typing)
+					g->flying = !g->flying;
 				break;
 
 			case KEY_ITEM_NEXT:
-				g->item_index = (g->item_index + 1) % item_count;
+				if (!g->typing)
+					g->item_index = (g->item_index + 1) % item_count;
 				break;
 			case KEY_ITEM_PREV:
-				g->item_next--;
-				if (g->item_next < 0)
-					g->item_index = item_count - 1;
+				if (!g->typing) {
+					g->item_next--;
+					if (g->item_next < 0)
+						g->item_index = item_count - 1;
+				}
 				break;
 			case KEY_OBSERVE:
-				g->observe1 = (g->observe1 + 1) % g->player_count;
+				if (!g->typing)
+					g->observe1 = (g->observe1 + 1) % g->player_count;
 				break;
 
 			case KEY_OBSERVE_INSET:
-				g->observe2 = (g->observe2 + 1) % g->player_count;
+				if (!g->typing)
+					g->observe2 = (g->observe2 + 1) % g->player_count;
+				break;
+
+			case KEY_CHAT:
+				g->typing = 1;
+				g->typing_buffer[0] = '\0';
+				SDL_StartTextInput();
+				break;
+
+			case KEY_COMMAND:
+				g->typing = 1;
+				g->typing_buffer[0] = '/';
+				g->typing_buffer[1] = '\0';
+				SDL_StartTextInput();
+				break;
+
+			case KEY_SIGN:
+				g->typing = 1;
+				// make sure KEY_SIGN matches CRAFT_KEY_SIGN
+				g->typing_buffer[0] = CRAFT_KEY_SIGN;
+				g->typing_buffer[1] = '\0';
+				SDL_StartTextInput();
 				break;
 
 			}
 
 			break;
 
+		case SDL_TEXTINPUT:
+			// could probably just do text[text_len++] = e.text.text[0]
+			// since I only handle ascii
+			if (g->typing && g->text_len < MAX_TEXT_LENGTH -1) {
+				strcat(text, e.text.text);
+				text_len += strlen(e.text.text);
+				//SDL_Log("text is \"%s\" \"%s\" %d %d\n", g->typing_buffer, composition, cursor, selection_len);
+				//SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "text is \"%s\" \"%s\" %d %d\n", text, composition, cursor, selection_len);
+			}
+			break;
+
+
 		case SDL_MOUSEBUTTONDOWN:
+			if (e.button.button == SDL_BUTTON_LEFT) {
+				if (exclusive) {
+					if (control) {
+						on_right_click();
+					} else {
+						on_left_click();
+					}
+				} else {
+					glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+				}
+			} else if (e.button.button == SDL_BUTTON_RIGHT) {
+				if (exclusive) {
+					if (control) {
+						on_light();
+					}
+					else {
+						on_right_click();
+					}
+				}
+			} else if (e.button.button == SDL_BUTTON_MIDDLE) {
+				if (exclusive) {
+					on_middle_click();
+				}
+			}
+
 			break;
 
 		case SDL_MOUSEWHEEL:
