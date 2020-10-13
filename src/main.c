@@ -191,8 +191,8 @@ int get_scale_factor() {
 	// so it only recalculates on window resize?
     int window_width, window_height;
     int buffer_width, buffer_height;
-    glfwGetWindowSize(g->window, &window_width, &window_height);
-    glfwGetFramebufferSize(g->window, &buffer_width, &buffer_height);
+    SDL_GetWindowSize(g->window, &window_width, &window_height);
+    SDL_GL_GetDrawableSize(g->window, &buffer_width, &buffer_height);
     int result = buffer_width / window_width;
     result = MAX(1, result);
     result = MIN(2, result);
@@ -3092,8 +3092,9 @@ int main(int argc, char **argv) {
         int previous = SDL_GetTicks();
         while (1) {
             // WINDOW SIZE AND SCALE //
+            // TODO move to handle_events, only recalc on resize
             g->scale = get_scale_factor();
-            glfwGetFramebufferSize(g->window, &g->width, &g->height);
+            SDL_GL_GetDrawableSize(g->window, &g->width, &g->height);
             glViewport(0, 0, g->width, g->height);
 
             // FRAME RATE //
