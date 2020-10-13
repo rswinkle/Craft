@@ -22,7 +22,7 @@
 typedef struct {
     unsigned int fps;
     unsigned int frames;
-    double since;
+    int since;
 } FPS;
 
 int rand_int(int n);

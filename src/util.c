@@ -18,10 +18,10 @@ double rand_double() {
 
 void update_fps(FPS *fps) {
     fps->frames++;
-    double now = glfwGetTime();
-    double elapsed = now - fps->since;
+    int now = SDL_GetTicks();
+    int elapsed = now - fps->since;
     if (elapsed >= 1) {
-        fps->fps = round(fps->frames / elapsed);
+        fps->fps = round(fps->frames*1000.0 / elapsed);
         fps->frames = 0;
         fps->since = now;
     }
