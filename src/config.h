@@ -1,6 +1,8 @@
 #ifndef _config_h_
 #define _config_h_
 
+#include <SDL.h>
+
 // app parameters
 #define DEBUG 0
 #define FULLSCREEN 0

@@ -1,4 +1,5 @@
 #include <GL/glew.h>
+#include <SDL.h>
 #include <curl/curl.h>
 #include <math.h>
 #include <stdio.h>
@@ -127,7 +128,6 @@ typedef struct {
     Player players[MAX_PLAYERS];
     int player_count;
     int typing;
-    int exclusive;
     char typing_buffer[MAX_TEXT_LENGTH];
     int text_len;
     int message_index;
@@ -2193,31 +2193,28 @@ int handle_events(double dt)
 
 	SDL_Event e;
 	int sc, code;
-	char buffer[STRBUF_SZ];
 
 	// eat all escapes this frame after copy dialog ended with "no"
 	int copy_escape = 0;
 
-	g->status = NOCHANGE;
-
 	SDL_Keymod mod_state = SDL_GetModState();
 
 	int control = mod_state & (KMOD_LCTRL | KMOD_RCTRL | KMOD_LGUI | KMOD_RGUI);
-
-
-	int ticks = SDL_GetTicks();
+    int exclusive = SDL_GetRelativeMouseMode();
 
 	while (SDL_PollEvent(&e)) {
+		/*
 		if (e.type == g->userevent) {
 
 			code = e.user.code;
 			switch (code) {
 			}
 		}
+		*/
 		switch (e.type) {
 		case SDL_QUIT:
 			return 1;
-		case SDL_KEYDOWN:
+		case SDL_KEYUP:
 			sc = e.key.keysym.scancode;
 			switch (sc) {
 			case SDL_SCANCODE_ESCAPE:
@@ -2228,12 +2225,18 @@ int handle_events(double dt)
 				}
 				return 1;
 				break;
+			}
+			break;
+
+		case SDL_KEYDOWN:
+			sc = e.key.keysym.scancode;
+			switch (sc) {
 			case SDL_SCANCODE_RETURN:
 				if (g->typing) {
 					if (mod_state & (KMOD_LSHIFT | KMOD_RSHIFT)) {
-						if (text_len < MAX_TEXT_LENGTH - 1) {
-							g->typing_buffer[text_len] = '\r'; // TODO? \n?
-							g->typing_buffer[text_len+1] = '\0';
+						if (g->text_len < MAX_TEXT_LENGTH - 1) {
+							g->typing_buffer[g->text_len] = '\r'; // TODO? \n?
+							g->typing_buffer[g->text_len+1] = '\0';
 						}
 					} else {
 						g->typing = 0;
@@ -2260,14 +2263,13 @@ int handle_events(double dt)
 
 			case SDL_SCANCODE_V:
 				if (control) {
-					buffer = SDL_GetClipboardText();
+					char* clip_buffer = SDL_GetClipboardText();
 					if (g->typing) {
 						g->suppress_char = 1;
-						strncat(g->typing_buffer, buffer,
-							MAX_TEXT_LENGTH - text_len - 1);
-					}
-					else {
-						parse_command(buffer, 0);
+						strncat(g->typing_buffer, clip_buffer,
+							MAX_TEXT_LENGTH - g->text_len - 1);
+					} else {
+						parse_command(clip_buffer, 0);
 					}
 				}
 				break;
@@ -2300,8 +2302,8 @@ int handle_events(double dt)
 				break;
 			case KEY_ITEM_PREV:
 				if (!g->typing) {
-					g->item_next--;
-					if (g->item_next < 0)
+					g->item_index--;
+					if (g->item_index < 0)
 						g->item_index = item_count - 1;
 				}
 				break;
@@ -2337,6 +2339,7 @@ int handle_events(double dt)
 			case KEY_CHAT:
 				g->typing = 1;
 				g->typing_buffer[0] = '\0';
+				g->text_len = 0;
 				SDL_StartTextInput();
 				break;
 
@@ -2344,6 +2347,7 @@ int handle_events(double dt)
 				g->typing = 1;
 				g->typing_buffer[0] = '/';
 				g->typing_buffer[1] = '\0';
+				g->text_len = 1;
 				SDL_StartTextInput();
 				break;
 
@@ -2363,8 +2367,8 @@ int handle_events(double dt)
 			// could probably just do text[text_len++] = e.text.text[0]
 			// since I only handle ascii
 			if (g->typing && g->text_len < MAX_TEXT_LENGTH -1) {
-				strcat(text, e.text.text);
-				text_len += strlen(e.text.text);
+				strcat(g->typing_buffer, e.text.text);
+				g->text_len += strlen(e.text.text);
 				//SDL_Log("text is \"%s\" \"%s\" %d %d\n", g->typing_buffer, composition, cursor, selection_len);
 				//SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "text is \"%s\" \"%s\" %d %d\n", text, composition, cursor, selection_len);
 			}
@@ -2661,8 +2665,8 @@ void on_mouse_button(GLFWwindow *window, int button, int action, int mods) {
 
 void cleanup()
 {
-	SDL_GL_DeleteContext(glcontext);
-	SDL_DestroyWindow(window);
+	SDL_GL_DeleteContext(g->glcontext);
+	SDL_DestroyWindow(g->window);
 
 	SDL_Quit();
 	curl_global_cleanup();
@@ -3043,6 +3047,8 @@ int main(int argc, char **argv) {
         Worker *worker = g->workers + i;
         worker->index = i;
         worker->state = WORKER_IDLE;
+        // TODO switch to using SDL threads, minimize dependencies
+        // simplify linking
         mtx_init(&worker->mtx, mtx_plain);
         cnd_init(&worker->cnd);
         thrd_create(&worker->thrd, worker_run, worker);
@@ -3111,7 +3117,7 @@ int main(int argc, char **argv) {
             }
             update_fps(&fps);
             int now = SDL_GetTicks();
-            double dt = (now - previous)/1000.0
+            double dt = (now - previous)/1000.0;
             dt = MIN(dt, 0.2);
             dt = MAX(dt, 0.0);
             previous = now;
@@ -3254,7 +3260,7 @@ int main(int argc, char **argv) {
             }
 
             // SWAP AND POLL //
-            SDL_GL_SwapWindow(window);
+            SDL_GL_SwapWindow(g->window);
 
             if (handle_events(dt)) {
                 running = 0;

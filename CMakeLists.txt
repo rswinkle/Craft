@@ -15,9 +15,7 @@ add_executable(
 
 add_definitions(-std=c99 -O3)
 
-add_subdirectory(deps/glfw)
 include_directories(deps/glew/include)
-include_directories(deps/glfw/include)
 include_directories(deps/lodepng)
 include_directories(deps/noise)
 include_directories(deps/sqlite)
@@ -30,20 +28,23 @@ if(MINGW)
         "C:/Program Files/CURL/include" "C:/Program Files (x86)/CURL/include")
 endif()
 
+find_package(SDL2 REQUIRED)
+include_directories(${SDL2_INCLUDE_DIRS})
+
 find_package(CURL REQUIRED)
 include_directories(${CURL_INCLUDE_DIR})
 
 if(APPLE)
     target_link_libraries(craft glfw
-        ${GLFW_LIBRARIES} ${CURL_LIBRARIES})
+        ${SDL2_LIBRARIES} ${CURL_LIBRARIES})
 endif()
 
 if(UNIX)
-    target_link_libraries(craft dl glfw
-        ${GLFW_LIBRARIES} ${CURL_LIBRARIES})
+    target_link_libraries(craft dl pthread
+        ${SDL2_LIBRARIES} GL m ${CURL_LIBRARIES})
 endif()
 
 if(MINGW)
-    target_link_libraries(craft ws2_32.lib glfw
-        ${GLFW_LIBRARIES} ${CURL_LIBRARIES})
+    target_link_libraries(craft ws2_32.lib
+        ${SDL2_LIBRARIES} ${CURL_LIBRARIES})
 endif()
