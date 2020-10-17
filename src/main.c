@@ -150,6 +150,7 @@ typedef struct {
     int server_port;
     int day_length;
     int time_changed;
+    int start_time;
     Block block0;
     Block block1;
     Block copy0;
@@ -163,12 +164,17 @@ int chunked(float x) {
     return floorf(roundf(x) / CHUNK_SIZE);
 }
 
+double get_time()
+{
+	return (SDL_GetTicks() - g->start_time)/1000.0;
+}
+
 float time_of_day() {
     if (g->day_length <= 0) {
         return 0.5;
     }
     float t;
-    t = glfwGetTime();
+    t = get_time();
     t = t / g->day_length;
     t = t - (int)t;
     return t;
@@ -431,7 +437,7 @@ void update_player(Player *player,
         State *s2 = &player->state2;
         memcpy(s1, s2, sizeof(State));
         s2->x = x; s2->y = y; s2->z = z; s2->rx = rx; s2->ry = ry;
-        s2->t = glfwGetTime();
+        s2->t = get_time();
         if (s2->rx - s1->rx > PI) {
             s1->rx += 2 * PI;
         }
@@ -451,7 +457,7 @@ void interpolate_player(Player *player) {
     State *s1 = &player->state1;
     State *s2 = &player->state2;
     float t1 = s2->t - s1->t;
-    float t2 = glfwGetTime() - s2->t;
+    float t2 = get_time() - s2->t;
     t1 = MIN(t1, 1);
     t1 = MAX(t1, 0.1);
     float p = MIN(t2 / t1, 1);
@@ -2867,7 +2873,7 @@ void parse_buffer(char *buffer) {
         double elapsed;
         int day_length;
         if (sscanf(line, "E,%lf,%d", &elapsed, &day_length) == 2) {
-            glfwSetTime(fmod(elapsed, day_length));
+            g->start_time = fmod(elapsed, day_length)*1000;
             g->day_length = day_length;
             g->time_changed = 1;
         }
