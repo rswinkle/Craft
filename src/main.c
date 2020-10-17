@@ -1,5 +1,4 @@
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
 #include <curl/curl.h>
 #include <math.h>
 #include <stdio.h>
@@ -2225,7 +2224,7 @@ int handle_events(double dt)
 				if (g->typing) {
 					g->typing = 0;
 				} else if (exclusive) {
-					glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+					SDL_SetRelativeMouseMode(SDL_FALSE);
 				}
 				return 1;
 				break;
@@ -2381,14 +2380,13 @@ int handle_events(double dt)
 						on_left_click();
 					}
 				} else {
-					glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+					SDL_SetRelativeMouseMode(SDL_TRUE);
 				}
 			} else if (e.button.button == SDL_BUTTON_RIGHT) {
 				if (exclusive) {
 					if (control) {
 						on_light();
-					}
-					else {
+					} else {
 						on_right_click();
 					}
 				}
@@ -2476,10 +2474,10 @@ int handle_events(double dt)
 
 }
 
+/*
 void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
     int control = mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER);
-    int exclusive =
-        glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+    int exclusive = SDL_GetRelativeMouseMode();
     if (action == GLFW_RELEASE) {
         return;
     }
@@ -2497,9 +2495,8 @@ void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE) {
         if (g->typing) {
             g->typing = 0;
-        }
-        else if (exclusive) {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (exclusive) {
+            SDL_SetRelativeMouseMode(SDL_FALSE);
         }
     }
     if (key == GLFW_KEY_ENTER) {
@@ -2538,7 +2535,7 @@ void on_key(GLFWwindow *window, int key, int scancode, int action, int mods) {
         }
     }
     if (control && key == 'V') {
-        const char *buffer = glfwGetClipboardString(window);
+        const char *buffer = SDL_GetClipboardText();
         if (g->typing) {
             g->suppress_char = 1;
             strncat(g->typing_buffer, buffer,
@@ -2627,8 +2624,7 @@ void on_scroll(GLFWwindow *window, double xdelta, double ydelta) {
 
 void on_mouse_button(GLFWwindow *window, int button, int action, int mods) {
     int control = mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER);
-    int exclusive =
-        glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+    int exclusive = SDL_GetRelativeMouseMode();
     if (action != GLFW_PRESS) {
         return;
     }
@@ -2642,7 +2638,7 @@ void on_mouse_button(GLFWwindow *window, int button, int action, int mods) {
             }
         }
         else {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            SDL_SetRelativeMouseMode(SDL_FALSE);
         }
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
@@ -2661,6 +2657,7 @@ void on_mouse_button(GLFWwindow *window, int button, int action, int mods) {
         }
     }
 }
+*/
 
 void cleanup()
 {
@@ -2715,6 +2712,7 @@ void create_window() {
 	printf("OpenGL version %d.%d with profile %d\n", major, minor, profile);
 }
 
+/*
 void handle_mouse_input() {
     int exclusive =
         glfwGetInputMode(g->window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
@@ -2807,6 +2805,7 @@ void handle_movement(double dt) {
         s->y = highest_block(s->x, s->z) + 2;
     }
 }
+*/
 
 void parse_buffer(char *buffer) {
     Player *me = g->players;
@@ -2919,7 +2918,7 @@ void reset_model() {
     memset(g->messages, 0, sizeof(char) * MAX_MESSAGES * MAX_TEXT_LENGTH);
     g->message_index = 0;
     g->day_length = DAY_LENGTH;
-    glfwSetTime(g->day_length / 3.0);
+    g->start_time = (g->day_length / 3)*1000;
     g->time_changed = 1;
 }
 
