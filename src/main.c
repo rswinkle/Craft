@@ -2190,6 +2190,7 @@ int handle_events(double dt)
 	State* s = &g->players->state;
 	int sz = 0;
 	int sx = 0;
+	float m = 0.0025;
 
 	SDL_Event e;
 	int sc, code;
@@ -2374,6 +2375,22 @@ int handle_events(double dt)
 			}
 			break;
 
+		case SDL_MOUSEMOTION:
+			s->rx += e.motion.xrel * m;
+			if (INVERT_MOUSE) {
+				s->ry += e.motion.yrel * m;
+			} else {
+				s->ry -= e.motion.yrel * m;
+			}
+			if (s->rx < 0) {
+				s->rx += RADIANS(360);
+			}
+			if (s->rx >= RADIANS(360)){
+				s->rx -= RADIANS(360);
+			}
+			s->ry = MAX(s->ry, -RADIANS(90));
+			s->ry = MIN(s->ry, RADIANS(90));
+			break;
 
 		case SDL_MOUSEBUTTONDOWN:
 			if (e.button.button == SDL_BUTTON_LEFT) {
@@ -2681,8 +2698,8 @@ void create_window() {
 	// TODO FULLSCREEN
 
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+	//SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
 	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL);
 	if (!g->window) {
@@ -3094,6 +3111,7 @@ int main(int argc, char **argv) {
 
         // LOAD STATE FROM DATABASE //
         int loaded = db_load_state(&s->x, &s->y, &s->z, &s->rx, &s->ry);
+        printf("loaded = %d\n", loaded);
         force_chunks(me);
         if (!loaded) {
             s->y = highest_block(s->x, s->z) + 2;
