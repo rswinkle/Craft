@@ -187,7 +187,7 @@ void text_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 			return;
 		}
 	} else {
-		color.w = max(color.w, 0.4);
+		color.w = MAX(color.w, 0.4);
 	}
 	builtins->gl_FragColor = color;
 }
