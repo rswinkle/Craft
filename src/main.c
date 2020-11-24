@@ -1,4 +1,4 @@
-#include <GL/glew.h>
+//#include <GL/glew.h>
 #include <SDL.h>
 #include <curl/curl.h>
 #include <math.h>
@@ -19,6 +19,7 @@
 #include "tinycthread.h"
 #include "util.h"
 #include "world.h"
+#include "shaders.h"
 
 #define MAX_CHUNKS 8192
 #define MAX_PLAYERS 128
@@ -150,6 +151,7 @@ typedef struct {
     int day_length;
     int time_changed;
     int start_time;
+    My_Uniforms uniforms;
     Block block0;
     Block block1;
     Block copy0;
@@ -1630,14 +1632,18 @@ int render_chunks(Attrib *attrib, Player *player) {
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform3f(attrib->camera, s->x, s->y, s->z);
-    glUniform1i(attrib->sampler, 0);
-    glUniform1i(attrib->extra1, 2);
-    glUniform1f(attrib->extra2, light);
-    glUniform1f(attrib->extra3, g->render_radius * CHUNK_SIZE);
-    glUniform1i(attrib->extra4, g->ortho);
-    glUniform1f(attrib->timer, time_of_day());
+
+    // PGL mat4 is by default column major like his even though I prefer row
+    // major like math/textbooks
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
+    g->uniforms.camera = make_vec3(s->x, s->y, s->z);
+    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.sky_sampler = attrib->extra1;
+    g->uniforms.daylight = light;
+    g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
+    g->unifroms.ortho = g->ortho;
+    g->unifroms.timer = time_of_day();
+
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
         if (chunk_distance(chunk, p, q) > g->render_radius) {
@@ -3001,9 +3007,19 @@ int main(int argc, char **argv) {
     Attrib sky_attrib = {0};
     GLuint program;
 
-    program = load_program(
-        "shaders/block_vertex.glsl", "shaders/block_fragment.glsl");
+    // 10 just because
+    GLenum interpolation[10];
+    for (int i=0; i<10; ++i) {
+        interpolation[i] = SMOOTH;
+    }
+
+    program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
     block_attrib.program = program;
+    block_attrib.sampler = texture;
+    block_attrib.position = 0;
+    block_attrib.normal = 1;
+    block_attrib.uv = 2;
+    /*
     block_attrib.position = glGetAttribLocation(program, "position");
     block_attrib.normal = glGetAttribLocation(program, "normal");
     block_attrib.uv = glGetAttribLocation(program, "uv");
@@ -3015,31 +3031,43 @@ int main(int argc, char **argv) {
     block_attrib.extra4 = glGetUniformLocation(program, "ortho");
     block_attrib.camera = glGetUniformLocation(program, "camera");
     block_attrib.timer = glGetUniformLocation(program, "timer");
+    */
 
-    program = load_program(
-        "shaders/line_vertex.glsl", "shaders/line_fragment.glsl");
+    program = pglCreateProgram(line_vs, line_fs, 0, interpolation, GL_FALSE);
     line_attrib.program = program;
+    line_attrib.position = 0;
+    /*
     line_attrib.position = glGetAttribLocation(program, "position");
     line_attrib.matrix = glGetUniformLocation(program, "matrix");
+    */
 
-    program = load_program(
-        "shaders/text_vertex.glsl", "shaders/text_fragment.glsl");
+    program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_FALSE);
     text_attrib.program = program;
+    text_attrib.sampler = font;
+    text_attrib.position = 0;
+    text_attrib.uv = 2;
+    /*
     text_attrib.position = glGetAttribLocation(program, "position");
     text_attrib.uv = glGetAttribLocation(program, "uv");
     text_attrib.matrix = glGetUniformLocation(program, "matrix");
     text_attrib.sampler = glGetUniformLocation(program, "sampler");
     text_attrib.extra1 = glGetUniformLocation(program, "is_sign");
+    */
 
-    program = load_program(
-        "shaders/sky_vertex.glsl", "shaders/sky_fragment.glsl");
+    program = pglCreateProgram(sky_vs, sky_fs, 2, interpolation, GL_FALSE);
     sky_attrib.program = program;
+    sky_attrib.sampler = sky;
+    sky_attrib.position = 0;
+    sky_attrib.normal = 1;
+    sky_attrib.uv = 2;
+    /*
     sky_attrib.position = glGetAttribLocation(program, "position");
     sky_attrib.normal = glGetAttribLocation(program, "normal");
     sky_attrib.uv = glGetAttribLocation(program, "uv");
     sky_attrib.matrix = glGetUniformLocation(program, "matrix");
     sky_attrib.sampler = glGetUniformLocation(program, "sampler");
     sky_attrib.timer = glGetUniformLocation(program, "timer");
+    */
 
     // CHECK COMMAND LINE ARGUMENTS //
     if (argc == 2 || argc == 3) {
