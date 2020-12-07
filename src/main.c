@@ -1,4 +1,3 @@
-//#include <GL/glew.h>
 #include <SDL.h>
 #include <curl/curl.h>
 #include <math.h>
@@ -20,6 +19,7 @@
 #include "util.h"
 #include "world.h"
 #include "shaders.h"
+
 
 #define MAX_CHUNKS 8192
 #define MAX_PLAYERS 128
@@ -118,7 +118,11 @@ typedef struct {
 
 typedef struct {
     SDL_Window *window;
-    SDL_GLContext glcontext;
+    SDL_Renderer* ren;
+    SDL_Texture* tex;
+    u32* bbufpix;
+    glContext context;
+
     Worker workers[WORKERS];
     Chunk chunks[MAX_CHUNKS];
     int chunk_count;
@@ -313,9 +317,9 @@ void draw_triangles_3d_ao(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 10, 0);
     glVertexAttribPointer(attrib->normal, 3, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 10, (GLvoid *)(sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 10, (sizeof(GLfloat) * 3));
     glVertexAttribPointer(attrib->uv, 4, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 10, (GLvoid *)(sizeof(GLfloat) * 6));
+        sizeof(GLfloat) * 10, (sizeof(GLfloat) * 6));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->normal);
@@ -330,7 +334,7 @@ void draw_triangles_3d_text(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 5, 0);
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 5, (GLvoid *)(sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 5, (sizeof(GLfloat) * 3));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->uv);
@@ -345,9 +349,9 @@ void draw_triangles_3d(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 8, 0);
     glVertexAttribPointer(attrib->normal, 3, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 8, (GLvoid *)(sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 8, (sizeof(GLfloat) * 3));
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 8, (GLvoid *)(sizeof(GLfloat) * 6));
+        sizeof(GLfloat) * 8, (sizeof(GLfloat) * 6));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->normal);
@@ -362,7 +366,7 @@ void draw_triangles_2d(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 2, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 4, 0);
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 4, (GLvoid *)(sizeof(GLfloat) * 2));
+        sizeof(GLfloat) * 4, (sizeof(GLfloat) * 2));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->uv);
@@ -1641,8 +1645,8 @@ int render_chunks(Attrib *attrib, Player *player) {
     g->uniforms.sky_sampler = attrib->extra1;
     g->uniforms.daylight = light;
     g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
-    g->unifroms.ortho = g->ortho;
-    g->unifroms.timer = time_of_day();
+    g->uniforms.ortho = g->ortho;
+    g->uniforms.timer = time_of_day();
 
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
@@ -2688,7 +2692,10 @@ void on_mouse_button(GLFWwindow *window, int button, int action, int mods) {
 
 void cleanup()
 {
-	SDL_GL_DeleteContext(g->glcontext);
+	free_glContext(&g->context);
+
+	SDL_DestroyTexture(g->tex);
+	SDL_DestroyRenderer(g->ren);
 	SDL_DestroyWindow(g->window);
 
 	SDL_Quit();
@@ -2697,46 +2704,41 @@ void cleanup()
 
 void create_window() {
 
-	if (SDL_Init(SDL_INIT_VIDEO)) {
-		printf("SDL_Init error: %s\n", SDL_GetError());
+	SDL_SetMainReady();
+	if (SDL_Init(SDL_INIT_EVERYTHING)) {
+		printf("SDL_init error: %s\n", SDL_GetError());
 		exit(0);
 	}
 	// TODO FULLSCREEN
 
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-	//SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
-	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_OPENGL);
+	g->ren = NULL;
+	g->tex = NULL;
+	
+	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
 	if (!g->window) {
 		printf("Failed to create window: %s\n", SDL_GetError());
+		SDL_Quit();
 		exit(0);
 	}
 
-	g->glcontext = SDL_GL_CreateContext(g->window);
-	if (!g->glcontext) {
-		printf("Failed to create OpenGL Context: %s\n", SDL_GetError());
+	g->ren = SDL_CreateRenderer(g->window, -1, SDL_RENDERER_SOFTWARE);
+	g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WINDOW_WIDTH, WINDOW_HEIGHT);
+
+	g->bbufpix = NULL; // should already be NULL since global/static but meh
+
+	if (!init_glContext(&g->context, &g->bbufpix, WINDOW_WIDTH, WINDOW_HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
+		puts("Failed to initialize glContext");
 		cleanup();
 		exit(0);
 	}
-	
-	glewExperimental = GL_TRUE;
-	GLenum err = glewInit();
-	if (err != GLEW_OK) {
-		printf("Error: %s\n", glewGetErrorString(err));
-		cleanup();
-		exit(0);
-	}
 
-	// not sure if this is still necessary
-	//check_errors(0, "Clearing stupid error after glewInit");
+	set_glContext(&g->context);
 
-	int major, minor, profile;
-	SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &major);
-	SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &minor);
-	SDL_GL_GetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, &profile);
-
-	printf("OpenGL version %d.%d with profile %d\n", major, minor, profile);
+	puts("OpenGL info:");
+	printf("Vendor: %s\n", glGetString(GL_VENDOR));
+	printf("Renderer: %s\n", glGetString(GL_RENDERER));
+	printf("Version: %s\n", glGetString(GL_VERSION));
+	printf("ShadingL Language: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
 }
 
 /*

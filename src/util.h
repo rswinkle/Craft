@@ -1,15 +1,15 @@
 #ifndef _util_h_
 #define _util_h_
 
-#include <GL/glew.h>
+#include "portablegl.h"
 #include "config.h"
 
 #define PI 3.14159265359
 #define DEGREES(radians) ((radians) * 180 / PI)
 #define RADIANS(degrees) ((degrees) * PI / 180)
 #define ABS(x) ((x) < 0 ? (-(x)) : (x))
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+//#define MIN(a, b) ((a) < (b) ? (a) : (b))
+//#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define SIGN(x) (((x) > 0) - ((x) < 0))
 
 #if DEBUG

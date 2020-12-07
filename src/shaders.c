@@ -1,7 +1,9 @@
 
+#define PORTABLEGL_IMPLEMENTATION
+#include "shaders.h"
 
 // Could/should just use the default shaders in PortableGL for lines
-void line_vp(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
+void line_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
 	builtins->gl_Position = mult_mat4_vec4(*((mat4*)uniforms), ((vec4*)vertex_attribs)[0]);
 }

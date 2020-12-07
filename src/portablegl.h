@@ -248,8 +248,13 @@ extern "C" {
 #define DEG_TO_HR(x)    ((x) * 15.0)
 #define RAD_TO_HR(x)    DEG_TO_HR(RAD_TO_DEG(x))
 
+// TODO rename RM_MAX?  make proper inline functions?
+#ifndef MAX
 #define MAX(a, b)  ((a) > (b)) ? (a) : (b)
+#endif
+#ifndef MIN
 #define MIN(a, b)  ((a) < (b)) ? (a) : (b)
+#endif
 
 #define MAP(X, A, B, C, D) (X-A)/(B-A) * (D-C) + C
 
@@ -1181,6 +1186,138 @@ inline void extract_rotation_mat4(mat3 dst, mat4 src, int normalize)
 #undef M44
 
 
+#ifndef EXCLUDE_GLSL
+// GLSL functions
+//
+static inline float clamp_01(float f)
+{
+	if (f < 0.0f) return 0.0f;
+	if (f > 1.0f) return 1.0f;
+	return f;
+}
+
+static inline float clamp(float x, float minVal, float maxVal)
+{
+	if (x < minVal) return minVal;
+	if (x > maxVal) return maxVal;
+	return x;
+}
+
+
+#define PGL_VECTORIZE2_VEC(func) \
+inline vec2 func##_vec2(vec2 v) \
+{ \
+	return make_vec2(func(v.x), func(v.y)); \
+}
+#define PGL_VECTORIZE3_VEC(func) \
+inline vec3 func##_vec3(vec3 v) \
+{ \
+	return make_vec3(func(v.x), func(v.y), func(v.z)); \
+}
+#define PGL_VECTORIZE4_VEC(func) \
+inline vec4 func##_vec4(vec4 v) \
+{ \
+	return make_vec4(func(v.x), func(v.y), func(v.z), func(v.w)); \
+}
+
+#define PGL_VECTORIZE_VEC(func) \
+	PGL_VECTORIZE2_VEC(func) \
+	PGL_VECTORIZE3_VEC(func) \
+	PGL_VECTORIZE4_VEC(func)
+
+#define PGL_STATIC_VECTORIZE2_VEC(func) \
+static inline vec2 func##_vec2(vec2 v) \
+{ \
+	return make_vec2(func(v.x), func(v.y)); \
+}
+#define PGL_STATIC_VECTORIZE3_VEC(func) \
+static inline vec3 func##_vec3(vec3 v) \
+{ \
+	return make_vec3(func(v.x), func(v.y), func(v.z)); \
+}
+#define PGL_STATIC_VECTORIZE4_VEC(func) \
+static inline vec4 func##_vec4(vec4 v) \
+{ \
+	return make_vec4(func(v.x), func(v.y), func(v.z), func(v.w)); \
+}
+
+#define PGL_STATIC_VECTORIZE_VEC(func) \
+	PGL_STATIC_VECTORIZE2_VEC(func) \
+	PGL_STATIC_VECTORIZE3_VEC(func) \
+	PGL_STATIC_VECTORIZE4_VEC(func)
+
+static inline vec2 clamp_vec2(vec2 x, float minVal, float maxVal)
+{
+	return make_vec2(clamp(x.x, minVal, maxVal), clamp(x.y, minVal, maxVal));
+}
+static inline vec3 clamp_vec3(vec3 x, float minVal, float maxVal)
+{
+	return make_vec3(clamp(x.x, minVal, maxVal), clamp(x.y, minVal, maxVal), clamp(x.z, minVal, maxVal));
+}
+static inline vec4 clamp_vec4(vec4 x, float minVal, float maxVal)
+{
+	return make_vec4(clamp(x.x, minVal, maxVal), clamp(x.y, minVal, maxVal), clamp(x.z, minVal, maxVal), clamp(x.w, minVal, maxVal));
+}
+
+
+static inline vec3 reflect_vec3(vec3 i, vec3 n)
+{
+	return sub_vec3s(i, scale_vec3(n, 2 * dot_vec3s(i, n)));
+}
+
+static inline float smoothstep(float edge0, float edge1, float x)
+{
+	float t = clamp_01((x-edge0)/(edge1-edge0));
+	return t*t*(3 - 2*t);
+}
+
+
+static inline float mix(float x, float y, float a)
+{
+	return x*(1-a) + y*a;
+}
+
+static inline vec2 mix_vec2s(vec2 x, vec2 y, float a)
+{
+	return add_vec2s(scale_vec2(x, (1-a)), scale_vec2(y, a));
+}
+
+static inline vec3 mix_vec3s(vec3 x, vec3 y, float a)
+{
+	return add_vec3s(scale_vec3(x, (1-a)), scale_vec3(y, a));
+}
+
+static inline vec4 mix_vec4s(vec4 x, vec4 y, float a)
+{
+	return add_vec4s(scale_vec4(x, (1-a)), scale_vec4(y, a));
+}
+
+PGL_VECTORIZE_VEC(fabs)
+PGL_VECTORIZE_VEC(floor)
+PGL_VECTORIZE_VEC(ceil)
+PGL_VECTORIZE_VEC(sin)
+PGL_VECTORIZE_VEC(cos)
+PGL_VECTORIZE_VEC(tan)
+PGL_VECTORIZE_VEC(asin)
+PGL_VECTORIZE_VEC(acos)
+PGL_VECTORIZE_VEC(atan)
+PGL_VECTORIZE_VEC(sinh)
+PGL_VECTORIZE_VEC(cosh)
+PGL_VECTORIZE_VEC(tanh)
+
+static inline float radians(float degrees) { return DEG_TO_RAD(degrees); }
+static inline float degrees(float radians) { return RAD_TO_DEG(radians); }
+static inline float fract(float x) { return x - floor(x); }
+
+PGL_STATIC_VECTORIZE_VEC(radians)
+PGL_STATIC_VECTORIZE_VEC(degrees)
+PGL_STATIC_VECTORIZE_VEC(fract)
+
+#endif
+
+
+
+
 typedef struct Color
 {
 	u8 r;
@@ -1270,7 +1407,7 @@ Plane(vec3 a, vec3 b, vec3 c)	//ccw winding
 
 
 // TODO hmm would have to change mat3 and mat4 to proper
-// structurs to have operators return them since our
+// structures to have operators return them since our
 // current mat*mat functions take the output mat as a parameter
 #ifdef __cplusplus
 inline vec3 operator*(mat3 m, vec3& v)
@@ -1832,13 +1969,29 @@ enum
 	//PixelStore parameters
 	GL_UNPACK_ALIGNMENT,
 	GL_PACK_ALIGNMENT,
+
+	// Texture unit's (not used but eases porting)
+	// but I'm not doing 80 or bothering with GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+	GL_TEXTURE0,
+	GL_TEXTURE1,
+	GL_TEXTURE2,
+	GL_TEXTURE3,
+	GL_TEXTURE4,
+	GL_TEXTURE5,
+	GL_TEXTURE6,
+	GL_TEXTURE7,
 	
 	//implemented glEnable options
 	GL_CULL_FACE,
 	GL_DEPTH_TEST,
 	GL_DEPTH_CLAMP,
-	GL_LINE_SMOOTH,
+	GL_LINE_SMOOTH,  // sort of, it just draws a thicker line really
 	GL_BLEND,
+
+	// TODO glEnable options
+	GL_COLOR_LOGIC_OP,
+	GL_POLYGON_OFFSET_FILL,
+	GL_SCISSOR_TEST,
 
 	//provoking vertex
 	GL_FIRST_VERTEX_CONVENTION,
@@ -1861,6 +2014,23 @@ enum
 	GL_FRONT_AND_BACK,
 	GL_CCW,
 	GL_CW,
+
+	// glLogicOp logic ops
+	GL_CLEAR,
+	GL_SET,
+	GL_COPY,
+	GL_NOOP,
+	GL_INVERT,
+	GL_AND,
+	GL_NAND,
+	GL_OR,
+	GL_NOR,
+	GL_XOR,
+	GL_EQUIV,
+	GL_AND_REVERSE,
+	GL_AND_INVERTED,
+	GL_OR_REVERSE,
+	GL_OR_INVERTED,
 
 	//data types
 	GL_UNSIGNED_BYTE,
@@ -1906,7 +2076,7 @@ enum
 #define GL_MAX_VERTEX_OUTPUT_COMPONENTS 64
 #define GL_MAX_DRAW_BUFFERS 8
 
-
+//TODO use prefix like GL_SMOOTH?  PGL_SMOOTH?
 enum { SMOOTH, FLAT, NOPERSPECTIVE };
 
 
@@ -3964,11 +4134,16 @@ void glFrontFace(GLenum mode);
 void glPolygonMode(GLenum face, GLenum mode);
 void glPointSize(GLfloat size);
 void glPointParameteri(GLenum pname, GLint param);
+void glLineWidth(GLfloat width);
+void glLogicOp(GLenum opcode);
+void glPolygonOffset(GLfloat factor, GLfloat units);
+void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
 
 //textures
 void glGenTextures(GLsizei n, GLuint* textures);
 void glBindTexture(GLenum target, GLuint texture);
 
+void glActiveTexture(GLenum texture);
 void glTexParameteri(GLenum target, GLenum pname, GLint param);
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params);
 void glPixelStorei(GLenum pname, GLint param);
@@ -4102,7 +4277,6 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
 
 #ifdef PORTABLEGL_IMPLEMENTATION
 
-#include "crsw_math.h"
 
 
 extern inline float rsw_rand_float(float min, float max);
@@ -8503,7 +8677,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	cvec_glTexture(&context->textures, 0, 1);
 	cvec_glVertex(&context->glverts, 0, 10);
 
-	//might as well just set it to MAX_VERTICES * MAX_OUTPUT_COMPONENTS
+	//TODO might as well just set it to MAX_VERTICES * MAX_OUTPUT_COMPONENTS
 	cvec_float(&context->vs_output.output_buf, 0, 0);
 
 
@@ -8557,7 +8731,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	glVertex_Array tmp_va;
 	init_glVertex_Array(&tmp_va);
 	cvec_push_glVertex_Array(&context->vertex_arrays, tmp_va);
-	context->cur_vertex_array = 0; 
+	context->cur_vertex_array = 0;
 
 	//setup buffers and textures
 	//need to push back once since 0 is invalid
@@ -9209,8 +9383,6 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		int p = height*byte_width;
 		u8* texdata = c->textures.a[cur_tex].data;
 
-		//printf("texdata etc =\n%lu\n%lu\n%lu\n", texdata, c->textures.a[cur_tex].data, c->textures.a[cur_tex].data + mem_size);
-		
 		if (data) {
 			if (!padding_needed) {
 				memcpy(&texdata[target*p], data, height*byte_width);
@@ -9983,6 +10155,13 @@ GLuint glCreateProgram() { return 0; }
 GLuint glCreateShader(GLenum shaderType) { return 0; }
 GLint glGetUniformLocation(GLuint program, const GLchar* name) { return 0; }
 
+// TODO
+void glLogicOp(GLenum opcode) { }
+void glLineWidth(GLfloat width) { }
+void glScissor(GLint x, GLint y, GLsizei width, GLsizei height) { }
+void glPolygonOffset(GLfloat factor, GLfloat units) { }
+
+void glActiveTexture(GLenum texture) { }
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { }
 
 void glUniform1f(GLint location, GLfloat v0) { }
