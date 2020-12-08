@@ -41,45 +41,48 @@ void block_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins,
 {
 	//convenience
 	vec4* v_attribs = vertex_attribs;
-	float* vs_out = (vec3*)vs_output;;
 	My_Uniforms* u = uniforms;
 
-	builtins->gl_Position = mult_mat4_vec4(u->matrix, v_attribs[0]);
+	vec4 pos = v_attribs[0];
+	builtins->gl_Position = mult_mat4_vec4(u->matrix, pos);
 
-	// outputs, to assign to vs_out
-	vec2 fragment_uv = *(vec2*)&v_attribs[2];
-	*(vec2*)vs_out = fragment_uv;
+	// outputs, to assign to vs_output
+	vec4 uv = v_attribs[2];
+	vec2 fragment_uv = { uv.x, uv.y };
+	*(vec2*)vs_output = fragment_uv;
 
 	float fragment_ao = 0.3 + (1.0 - uv.z) * 0.7;
-	vs_out[2] = fragment_ao;
+	vs_output[2] = fragment_ao;
 	float fragment_light = uv.w;
-	vs_out[3] = fragment_light;
+	vs_output[3] = fragment_light;
 
-	const light_direction = normalize(vec3(-1.0, 1.0, -1.0));
-	float normal = *(vec3*)&v_attribs[1];
-	float tmp = dot(normal, light_direction);  // avoid macro duplication
+	const vec3 light_direction = norm_vec3(make_vec3(-1.0, 1.0, -1.0));
+	vec3 normal = *(vec3*)&v_attribs[1];
+	float tmp = dot_vec3s(normal, light_direction);  // avoid macro duplication
 	float diffuse = MAX(0.0, tmp);
-	vs_out[6] = diffuse;
+	vs_output[6] = diffuse;
+
+	float fog_factor, fog_height;
 
 	if (u->ortho) {
 		fog_factor = 0.0;
 		fog_height = 0.0;
 	} else {
-		float camera_distance = distance(camera, vec3(position));
-		fog_factor = pow(clamp(camera_distance / fog_distance, 0.0, 1.0), 4.0);
-		float dy = position.y - camera.y;
+		float camera_distance = distance_vec3(u->camera, make_vec3(pos.x, pos.y, pos.z));
+		fog_factor = pow(clamp(camera_distance / u->fog_distance, 0.0, 1.0), 4.0);
+		float dy = pos.y - u->camera.y;
 		// TODO
-		float dx = distance(position.xz, camera.xz);
-		fog_height = (atan(dy, dx) + RM_PI / 2) / RM_PI;
+		float dx = distance_vec2(make_vec2(pos.x, pos.z), make_vec2(u->camera.x, u->camera.z));
+		fog_height = (atan2f(dy, dx) + RM_PI / 2) / RM_PI;
 	}
-	vs_out[4] = fog_factor;
-	vs_out[5] = fog_height;
+	vs_output[4] = fog_factor;
+	vs_output[5] = fog_height;
 }
 
 
 void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 {
-	My_uniforms* u = uniforms;
+	My_Uniforms* u = uniforms;
 
 	//interpolated variables
 	vec2 fragment_uv = *(vec2*)fs_input;
