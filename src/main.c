@@ -1647,6 +1647,7 @@ int render_chunks(Attrib *attrib, Player *player) {
     g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
     g->uniforms.ortho = g->ortho;
     g->uniforms.timer = time_of_day();
+    set_uniform(&g->uniforms);
 
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
@@ -1675,9 +1676,15 @@ void render_signs(Attrib *attrib, Player *player) {
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform1i(attrib->sampler, 3);
-    glUniform1i(attrib->extra1, 1);
+
+    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.is_sign = 1;  // extra1
+    set_uniform(&g->uniforms);
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform1i(attrib->sampler, 3);
+    //glUniform1i(attrib->extra1, 1);
+
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
         if (chunk_distance(chunk, p, q) > g->sign_radius) {
@@ -1706,9 +1713,17 @@ void render_sign(Attrib *attrib, Player *player) {
         matrix, g->width, g->height,
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform1i(attrib->sampler, 3);
-    glUniform1i(attrib->extra1, 1);
+
+    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.is_sign = 1;  // extra1
+    set_uniform(&g->uniforms);
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform1i(attrib->sampler, 3);
+    //glUniform1i(attrib->extra1, 1);
+
+
+
     char text[MAX_SIGN_LENGTH];
     strncpy(text, g->typing_buffer + 1, MAX_SIGN_LENGTH);
     text[MAX_SIGN_LENGTH - 1] = '\0';
@@ -1726,10 +1741,13 @@ void render_players(Attrib *attrib, Player *player) {
         matrix, g->width, g->height,
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
+
+    // TODO next
     glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     glUniform3f(attrib->camera, s->x, s->y, s->z);
     glUniform1i(attrib->sampler, 0);
     glUniform1f(attrib->timer, time_of_day());
+
     for (int i = 0; i < g->player_count; i++) {
         Player *other = g->players + i;
         if (other != player) {
@@ -1745,9 +1763,14 @@ void render_sky(Attrib *attrib, Player *player, GLuint buffer) {
         matrix, g->width, g->height,
         0, 0, 0, s->rx, s->ry, g->fov, 0, g->render_radius);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform1i(attrib->sampler, 2);
-    glUniform1f(attrib->timer, time_of_day());
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
+    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.timer = time_of_day();
+    set_uniform(&g->uniforms);
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform1i(attrib->sampler, 2);
+    //glUniform1f(attrib->timer, time_of_day());
     draw_triangles_3d(attrib, buffer, 512 * 3);
 }
 

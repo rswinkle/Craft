@@ -12,7 +12,7 @@ add_executable(
     deps/sqlite/sqlite3.c
     deps/tinycthread/tinycthread.c)
 
-add_definitions(-std=c99 -O3)
+add_definitions(-std=c99 -O0 -g)
 
 include_directories(deps/lodepng)
 include_directories(deps/noise)
@@ -39,7 +39,7 @@ endif()
 
 if(UNIX)
     target_link_libraries(craft dl pthread
-        ${SDL2_LIBRARIES} GL m ${CURL_LIBRARIES})
+        ${SDL2_LIBRARIES} m ${CURL_LIBRARIES})
 endif()
 
 if(MINGW)
