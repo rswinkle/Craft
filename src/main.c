@@ -1647,7 +1647,6 @@ int render_chunks(Attrib *attrib, Player *player) {
     g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
     g->uniforms.ortho = g->ortho;
     g->uniforms.timer = time_of_day();
-    set_uniform(&g->uniforms);
 
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
@@ -1670,16 +1669,27 @@ void render_signs(Attrib *attrib, Player *player) {
     int p = chunked(s->x);
     int q = chunked(s->z);
     float matrix[16];
+
+    printf("%f %f %f, %f %f\nfov = %f\northo = %d\nrender_rad = %d\n",
+         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     set_matrix_3d(
         matrix, g->width, g->height,
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+
+    puts("here's the matrix:");
+    print_mat4(matrix, "\n");
+
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
 
+    puts("here's the final matrix:");
+    print_mat4(matrix, "\n");
+    exit(0);
+
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
     g->uniforms.sampler = attrib->sampler;
     g->uniforms.is_sign = 1;  // extra1
-    set_uniform(&g->uniforms);
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     //glUniform1i(attrib->sampler, 3);
@@ -1714,9 +1724,9 @@ void render_sign(Attrib *attrib, Player *player) {
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
 
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
     g->uniforms.sampler = attrib->sampler;
     g->uniforms.is_sign = 1;  // extra1
-    set_uniform(&g->uniforms);
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     //glUniform1i(attrib->sampler, 3);
@@ -1742,11 +1752,19 @@ void render_players(Attrib *attrib, Player *player) {
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     glUseProgram(attrib->program);
 
-    // TODO next
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform3f(attrib->camera, s->x, s->y, s->z);
-    glUniform1i(attrib->sampler, 0);
-    glUniform1f(attrib->timer, time_of_day());
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
+    g->uniforms.camera = make_vec3(s->x, s->y, s->z);
+    g->uniforms.sampler = attrib->sampler;
+    //g->uniforms.sky_sampler = attrib->extra1;
+    //g->uniforms.daylight = light;
+    //g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
+    //g->uniforms.ortho = g->ortho;
+    g->uniforms.timer = time_of_day();
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform3f(attrib->camera, s->x, s->y, s->z);
+    //glUniform1i(attrib->sampler, 0);
+    //glUniform1f(attrib->timer, time_of_day());
 
     for (int i = 0; i < g->player_count; i++) {
         Player *other = g->players + i;
@@ -1766,7 +1784,6 @@ void render_sky(Attrib *attrib, Player *player, GLuint buffer) {
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
     g->uniforms.sampler = attrib->sampler;
     g->uniforms.timer = time_of_day();
-    set_uniform(&g->uniforms);
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     //glUniform1i(attrib->sampler, 2);
@@ -2991,36 +3008,36 @@ int main(int argc, char **argv) {
     glClearColor(0, 0, 0, 1);
 
     // LOAD TEXTURES //
-    GLuint texture;
-    glGenTextures(1, &texture);
+    GLuint block_tex;
+    glGenTextures(1, &block_tex);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindTexture(GL_TEXTURE_2D, block_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     load_png_texture("textures/texture.png");
 
-    GLuint font;
-    glGenTextures(1, &font);
+    GLuint font_tex;
+    glGenTextures(1, &font_tex);
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, font);
+    glBindTexture(GL_TEXTURE_2D, font_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     load_png_texture("textures/font.png");
 
-    GLuint sky;
-    glGenTextures(1, &sky);
+    GLuint sky_tex;
+    glGenTextures(1, &sky_tex);
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, sky);
+    glBindTexture(GL_TEXTURE_2D, sky_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     load_png_texture("textures/sky.png");
 
-    GLuint sign;
-    glGenTextures(1, &sign);
+    GLuint sign_tex;
+    glGenTextures(1, &sign_tex);
     glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, sign);
+    glBindTexture(GL_TEXTURE_2D, sign_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     load_png_texture("textures/sign.png");
@@ -3039,8 +3056,11 @@ int main(int argc, char **argv) {
     }
 
     program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
+    glUseProgram(program);
+    set_uniform(&g->uniforms);
     block_attrib.program = program;
-    block_attrib.sampler = texture;
+    block_attrib.sampler = block_tex;
+    block_attrib.extra1 = sky_tex;
     block_attrib.position = 0;
     block_attrib.normal = 1;
     block_attrib.uv = 2;
@@ -3059,6 +3079,8 @@ int main(int argc, char **argv) {
     */
 
     program = pglCreateProgram(line_vs, line_fs, 0, interpolation, GL_FALSE);
+    glUseProgram(program);
+    set_uniform(&g->uniforms);
     line_attrib.program = program;
     line_attrib.position = 0;
     /*
@@ -3067,8 +3089,10 @@ int main(int argc, char **argv) {
     */
 
     program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_FALSE);
+    glUseProgram(program);
+    set_uniform(&g->uniforms);
     text_attrib.program = program;
-    text_attrib.sampler = font;
+    text_attrib.sampler = font_tex;
     text_attrib.position = 0;
     text_attrib.uv = 2;
     /*
@@ -3080,8 +3104,10 @@ int main(int argc, char **argv) {
     */
 
     program = pglCreateProgram(sky_vs, sky_fs, 2, interpolation, GL_FALSE);
+    glUseProgram(program);
+    set_uniform(&g->uniforms);
     sky_attrib.program = program;
-    sky_attrib.sampler = sky;
+    sky_attrib.sampler = sky_tex;
     sky_attrib.position = 0;
     sky_attrib.normal = 1;
     sky_attrib.uv = 2;
@@ -3093,6 +3119,10 @@ int main(int argc, char **argv) {
     sky_attrib.sampler = glGetUniformLocation(program, "sampler");
     sky_attrib.timer = glGetUniformLocation(program, "timer");
     */
+
+    // add this here because we call handle_events after drawing currently
+    // and it gets set in there so first frame crashes
+    g->fov = 65;
 
     // CHECK COMMAND LINE ARGUMENTS //
     if (argc == 2 || argc == 3) {

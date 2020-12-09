@@ -10295,6 +10295,7 @@ static int wrap(int i, int size, GLenum mode)
 		return tmp;
 	default:
 		//should never happen, get rid of compile warning
+		printf("Unrecognized/unsupported texture wrap mode: %d\n", mode);
 		assert(0);
 		return 0;
 	}
