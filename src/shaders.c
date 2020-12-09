@@ -93,7 +93,7 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	float diffuse = fs_input[6];
 
 	// TODO add vector conversion functions to crsw_math
-	vec4 tcolor = texture2D(u->sampler, fragment_uv.x, fragment_uv.y);
+	vec4 tcolor = texture2D(u->block_tex, fragment_uv.x, fragment_uv.y);
 	vec3 color = { tcolor.x, tcolor.y, tcolor.z };
 	if (equal_vec3s(color, make_vec3(1.0, 0.0, 1.0))) {
 		builtins->discard = GL_TRUE;
@@ -124,7 +124,7 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	// min/max for each field?
 	color = clamp_vec3(cl_ao, 0.0f, 1.0f);
 
-	vec3 sky_color = vec4_to_vec3(texture2D(u->sky_sampler, u->timer, fog_height));
+	vec3 sky_color = vec4_to_vec3(texture2D(u->sky_tex, u->timer, fog_height));
 
 	// TODO mix
 	color = mix_vec3s(color, sky_color, fog_factor);
@@ -155,7 +155,7 @@ void sky_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	vec2 fragment_uv = *(vec2*)fs_input;
 
 	// only have xyzw not rgba or stpq
-	builtins->gl_FragColor = texture2D(u->sky_sampler, u->timer, fragment_uv.y);
+	builtins->gl_FragColor = texture2D(u->sky_tex, u->timer, fragment_uv.y);
 }
 
 // can use sky_vs as text_vs

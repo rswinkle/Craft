@@ -14,8 +14,12 @@ typedef struct My_Uniforms
 	float timer;
 	float daylight;
 
-	GLuint sampler;
-	GLuint sky_sampler;
+	GLuint block_tex;
+	GLuint font_tex;
+	GLuint sky_tex;
+	GLuint sign_tex;
+
+	GLuint sampler; // remove 
 
 	vec3 light_dir;
 } My_Uniforms;

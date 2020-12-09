@@ -1642,7 +1642,6 @@ int render_chunks(Attrib *attrib, Player *player) {
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
     g->uniforms.camera = make_vec3(s->x, s->y, s->z);
     g->uniforms.sampler = attrib->sampler;
-    g->uniforms.sky_sampler = attrib->extra1;
     g->uniforms.daylight = light;
     g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
     g->uniforms.ortho = g->ortho;
@@ -1676,19 +1675,20 @@ void render_signs(Attrib *attrib, Player *player) {
         matrix, g->width, g->height,
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
 
-    puts("here's the matrix:");
-    print_mat4(matrix, "\n");
+    // TODO
+    //puts("here's the matrix:");
+    //print_mat4(matrix, "\n");
 
     float planes[6][4];
     frustum_planes(planes, g->render_radius, matrix);
     glUseProgram(attrib->program);
 
-    puts("here's the final matrix:");
-    print_mat4(matrix, "\n");
-    exit(0);
+    //puts("here's the final matrix:");
+    //print_mat4(matrix, "\n");
+    //exit(0);
 
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.sampler = g->uniforms.sign_tex;
     g->uniforms.is_sign = 1;  // extra1
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
@@ -1725,7 +1725,7 @@ void render_sign(Attrib *attrib, Player *player) {
     glUseProgram(attrib->program);
 
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.sampler = attrib->sampler;
+    g->uniforms.sampler = g->uniforms.sign_tex;
     g->uniforms.is_sign = 1;  // extra1
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
@@ -1828,10 +1828,17 @@ void render_item(Attrib *attrib) {
     float matrix[16];
     set_matrix_item(matrix, g->width, g->height, g->scale);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform3f(attrib->camera, 0, 0, 5);
-    glUniform1i(attrib->sampler, 0);
-    glUniform1f(attrib->timer, time_of_day());
+
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
+    g->uniforms.camera = make_vec3(0, 0, 5);
+    //g->uniforms.sampler = block_tex;
+    g->uniforms.timer = time_of_day();
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform3f(attrib->camera, 0, 0, 5);
+    //glUniform1i(attrib->sampler, 0);
+    //glUniform1f(attrib->timer, time_of_day());
+
     int w = items[g->item_index];
     if (is_plant(w)) {
         GLuint buffer = gen_plant_buffer(0, 0, 0, 0.5, w);
@@ -1851,9 +1858,15 @@ void render_text(
     float matrix[16];
     set_matrix_2d(matrix, g->width, g->height);
     glUseProgram(attrib->program);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
-    glUniform1i(attrib->sampler, 1);
-    glUniform1i(attrib->extra1, 0);
+
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
+    g->uniforms.sampler = g->uniforms.font_tex;
+    g->uniforms.is_sign = 0;  // extra1
+
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniform1i(attrib->sampler, 1);
+    //glUniform1i(attrib->extra1, 0);
+
     int length = strlen(text);
     x -= n * justify * (length - 1) / 2;
     GLuint buffer = gen_text_buffer(x, y, n, text);
@@ -3054,6 +3067,11 @@ int main(int argc, char **argv) {
     for (int i=0; i<10; ++i) {
         interpolation[i] = SMOOTH;
     }
+
+    g->uniforms.block_tex = block_tex;
+    g->uniforms.font_tex = font_tex;
+    g->uniforms.sky_tex = block_tex;
+    g->uniforms.sign_tex = sign_tex;
 
     program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
     glUseProgram(program);
