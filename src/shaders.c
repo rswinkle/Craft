@@ -138,8 +138,8 @@ void sky_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, v
 	vec4* v_attribs = vertex_attribs;
 	My_Uniforms* u = uniforms;
 
-	print_mat4(u->matrix, "\n");
-	print_vec4(v_attribs[0], "\n");
+	//print_mat4(u->matrix, "\n");
+	//print_vec4(v_attribs[0], "\n");
 	builtins->gl_Position = mult_mat4_vec4(u->matrix, v_attribs[0]);
 
 	vec2 fragment_uv = *(vec2*)&v_attribs[2];

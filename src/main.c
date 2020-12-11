@@ -1669,8 +1669,8 @@ void render_signs(Attrib *attrib, Player *player) {
     int q = chunked(s->z);
     float matrix[16];
 
-    printf("%f %f %f, %f %f\nfov = %f\northo = %d\nrender_rad = %d\n",
-         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+    //printf("%f %f %f, %f %f\nfov = %f\northo = %d\nrender_rad = %d\n",
+    //    s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
     set_matrix_3d(
         matrix, g->width, g->height,
         s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
@@ -3379,7 +3379,11 @@ int main(int argc, char **argv) {
             }
 
             // SWAP AND POLL //
-            SDL_GL_SwapWindow(g->window);
+            //SDL_GL_SwapWindow(g->window);
+            SDL_UpdateTexture(g->tex, NULL, g->bbufpix, WINDOW_WIDTH * sizeof(u32));
+            //Render the scene
+            SDL_RenderCopy(g->ren, g->tex, NULL, NULL);
+            SDL_RenderPresent(g->ren);
 
             if (handle_events(dt)) {
                 running = 0;
