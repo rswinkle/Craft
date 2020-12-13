@@ -6,8 +6,8 @@
 // app parameters
 #define DEBUG 0
 #define FULLSCREEN 0
-#define WINDOW_WIDTH 1024
-#define WINDOW_HEIGHT 768
+#define WINDOW_WIDTH 640
+#define WINDOW_HEIGHT 480
 #define VSYNC 1
 #define SCROLL_THRESHOLD 0.1
 #define MAX_MESSAGES 4
@@ -87,10 +87,10 @@ enum {
 
 
 // advanced parameters
-#define CREATE_CHUNK_RADIUS 10
-#define RENDER_CHUNK_RADIUS 10
-#define RENDER_SIGN_RADIUS 4
-#define DELETE_CHUNK_RADIUS 14
+#define CREATE_CHUNK_RADIUS 4
+#define RENDER_CHUNK_RADIUS 4
+#define RENDER_SIGN_RADIUS 2
+#define DELETE_CHUNK_RADIUS 8
 #define CHUNK_SIZE 32
 #define COMMIT_INTERVAL 5
 

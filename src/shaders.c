@@ -96,6 +96,7 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	vec4 tcolor = texture2D(u->block_tex, fragment_uv.x, fragment_uv.y);
 	vec3 color = { tcolor.x, tcolor.y, tcolor.z };
 	if (equal_vec3s(color, make_vec3(1.0, 0.0, 1.0))) {
+		//printf("should discard\n");
 		builtins->discard = GL_TRUE;
 		return;
 	}

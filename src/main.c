@@ -201,9 +201,10 @@ int get_scale_factor() {
 	// TODO(rswinkle) straight conversion? move to handle_events
 	// so it only recalculates on window resize?
     int window_width, window_height;
-    int buffer_width, buffer_height;
+    int buffer_width = g->context.back_buffer.w;
+    int buffer_height = g->context.back_buffer.h;
     SDL_GetWindowSize(g->window, &window_width, &window_height);
-    SDL_GL_GetDrawableSize(g->window, &buffer_width, &buffer_height);
+    //SDL_GL_GetDrawableSize(g->window, &buffer_width, &buffer_height);
     int result = buffer_width / window_width;
     result = MAX(1, result);
     result = MIN(2, result);
@@ -3298,7 +3299,7 @@ int main(int argc, char **argv) {
 
             // RENDER TEXT //
             char text_buffer[1024];
-            float ts = 12 * g->scale;
+            float ts = 10 * g->scale;
             float tx = ts / 2;
             float ty = g->height - ts;
             if (SHOW_INFO_TEXT) {
