@@ -171,7 +171,9 @@ int chunked(float x) {
 
 double get_time()
 {
-	return (SDL_GetTicks() - g->start_time)/1000.0;
+    // start at 8 am
+    int start8 = (g->day_length / 3)*1000;
+    return (SDL_GetTicks()+start8 - g->start_time)/1000.0;
 }
 
 float time_of_day() {
@@ -1783,7 +1785,6 @@ void render_sky(Attrib *attrib, Player *player, GLuint buffer) {
         0, 0, 0, s->rx, s->ry, g->fov, 0, g->render_radius);
     glUseProgram(attrib->program);
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.sampler = attrib->sampler;
     g->uniforms.timer = time_of_day();
 
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
@@ -2955,8 +2956,10 @@ void parse_buffer(char *buffer) {
         double elapsed;
         int day_length;
         if (sscanf(line, "E,%lf,%d", &elapsed, &day_length) == 2) {
+            printf("elapsed = %f\nday_length = %d\n", elapsed, day_length);
             g->start_time = fmod(elapsed, day_length)*1000;
             g->day_length = day_length;
+            printf("start_time = %d\n", g->start_time);
             g->time_changed = 1;
         }
         if (line[0] == 'T' && line[1] == ',') {
@@ -3001,7 +3004,7 @@ void reset_model() {
     memset(g->messages, 0, sizeof(char) * MAX_MESSAGES * MAX_TEXT_LENGTH);
     g->message_index = 0;
     g->day_length = DAY_LENGTH;
-    g->start_time = (g->day_length / 3)*1000;
+    g->start_time = SDL_GetTicks(); //(g->day_length / 3)*1000;
     g->time_changed = 1;
 }
 
@@ -3071,7 +3074,7 @@ int main(int argc, char **argv) {
 
     g->uniforms.block_tex = block_tex;
     g->uniforms.font_tex = font_tex;
-    g->uniforms.sky_tex = block_tex;
+    g->uniforms.sky_tex = sky_tex;
     g->uniforms.sign_tex = sign_tex;
 
     program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
