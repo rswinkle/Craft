@@ -1805,7 +1805,8 @@ void render_wireframe(Attrib *attrib, Player *player) {
         glUseProgram(attrib->program);
         glLineWidth(1);
         glEnable(GL_COLOR_LOGIC_OP);
-        glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+        //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+        memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
         GLuint wireframe_buffer = gen_wireframe_buffer(hx, hy, hz, 0.53);
         draw_lines(attrib, wireframe_buffer, 3, 24);
         del_buffer(wireframe_buffer);
@@ -1819,7 +1820,8 @@ void render_crosshairs(Attrib *attrib) {
     glUseProgram(attrib->program);
     glLineWidth(4 * g->scale);
     glEnable(GL_COLOR_LOGIC_OP);
-    glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
+    memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
     GLuint crosshair_buffer = gen_crosshair_buffer();
     draw_lines(attrib, crosshair_buffer, 2, 4);
     del_buffer(crosshair_buffer);
