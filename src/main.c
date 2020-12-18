@@ -206,7 +206,6 @@ int get_scale_factor() {
     int buffer_width = g->context.back_buffer.w;
     int buffer_height = g->context.back_buffer.h;
     SDL_GetWindowSize(g->window, &window_width, &window_height);
-    //SDL_GL_GetDrawableSize(g->window, &buffer_width, &buffer_height);
     int result = buffer_width / window_width;
     result = MAX(1, result);
     result = MIN(2, result);
@@ -2290,8 +2289,9 @@ int handle_events(double dt)
 					g->typing = 0;
 				} else if (exclusive) {
 					SDL_SetRelativeMouseMode(SDL_FALSE);
+				} else {
+					return 1;
 				}
-				return 1;
 				break;
 			}
 			break;
@@ -2446,20 +2446,22 @@ int handle_events(double dt)
 			break;
 
 		case SDL_MOUSEMOTION:
-			s->rx += e.motion.xrel * m;
-			if (INVERT_MOUSE) {
-				s->ry += e.motion.yrel * m;
-			} else {
-				s->ry -= e.motion.yrel * m;
+			if (exclusive) {
+				s->rx += e.motion.xrel * m;
+				if (INVERT_MOUSE) {
+					s->ry += e.motion.yrel * m;
+				} else {
+					s->ry -= e.motion.yrel * m;
+				}
+				if (s->rx < 0) {
+					s->rx += RADIANS(360);
+				}
+				if (s->rx >= RADIANS(360)){
+					s->rx -= RADIANS(360);
+				}
+				s->ry = MAX(s->ry, -RADIANS(90));
+				s->ry = MIN(s->ry, RADIANS(90));
 			}
-			if (s->rx < 0) {
-				s->rx += RADIANS(360);
-			}
-			if (s->rx >= RADIANS(360)){
-				s->rx -= RADIANS(360);
-			}
-			s->ry = MAX(s->ry, -RADIANS(90));
-			s->ry = MIN(s->ry, RADIANS(90));
 			break;
 
 		case SDL_MOUSEBUTTONDOWN:
@@ -2500,6 +2502,24 @@ int handle_events(double dt)
 				g->item_index = item_count -1;
 			else
 				g->item_index %= item_count;
+			break;
+
+		case SDL_WINDOWEVENT:
+			switch (e.window.event) {
+			case SDL_WINDOWEVENT_SIZE_CHANGED:
+				// This is roughly what would be needed, and it's what I have
+				// in a couple PortableGL demos but clearly I'm missing something,
+				// some extra state/dependency, since it doesn't work here
+				//g->width = e.window.data1;
+				//g->height = e.window.data2;
+				//resize_framebuffer(g->width, g->height);
+				//g->scale = get_scale_factor();
+				//glViewport(0, 0, g->width, g->height);
+				//SDL_DestroyTexture(g->tex);
+				//g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g->width, g->height);
+
+				break;
+			}
 			break;
 
 		}
@@ -2773,8 +2793,10 @@ void create_window() {
 
 	g->ren = NULL;
 	g->tex = NULL;
+	g->width = WINDOW_WIDTH;
+	g->height = WINDOW_HEIGHT;
 	
-	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
+	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
 	if (!g->window) {
 		printf("Failed to create window: %s\n", SDL_GetError());
 		SDL_Quit();
@@ -3182,6 +3204,8 @@ int main(int argc, char **argv) {
     }
 
     // OUTER LOOP //
+    // TODO why is this loop even here?  The inner loop is the game loop
+    // and all this stuff above and below is one time init and shutdown stuff
     int running = 1;
     while (running) {
         // DATABASE INITIALIZATION //
@@ -3227,14 +3251,16 @@ int main(int argc, char **argv) {
             s->y = highest_block(s->x, s->z) + 2;
         }
 
+        g->scale = get_scale_factor();
+        glViewport(0, 0, g->width, g->height);
+
         // BEGIN MAIN LOOP //
         int previous = SDL_GetTicks();
         while (1) {
             // WINDOW SIZE AND SCALE //
             // TODO move to handle_events, only recalc on resize
-            g->scale = get_scale_factor();
-            SDL_GL_GetDrawableSize(g->window, &g->width, &g->height);
-            glViewport(0, 0, g->width, g->height);
+            //g->scale = get_scale_factor();
+            //glViewport(0, 0, g->width, g->height);
 
             // FRAME RATE //
             if (g->time_changed) {
@@ -3385,6 +3411,7 @@ int main(int argc, char **argv) {
                     render_text(&text_attrib, ALIGN_CENTER,
                         pw / 2, ts, ts, player->name);
                 }
+                glViewport(0, 0, g->width, g->height);
             }
 
             // SWAP AND POLL //
