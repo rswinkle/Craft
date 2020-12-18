@@ -2421,9 +2421,13 @@ int handle_events(double dt)
 
 			case KEY_SIGN:
 				g->typing = 1;
-				// make sure KEY_SIGN matches CRAFT_KEY_SIGN
-				g->typing_buffer[0] = CRAFT_KEY_SIGN;
-				g->typing_buffer[1] = '\0';
+				// don't need this because the TextInput event
+				// will add it
+				//g->typing_buffer[0] = CRAFT_KEY_SIGN;
+				//g->typing_buffer[1] = '\0';
+
+				g->typing_buffer[0] = '\0';
+				g->text_len = 0;
 				SDL_StartTextInput();
 				break;
 
@@ -2437,8 +2441,7 @@ int handle_events(double dt)
 			if (g->typing && g->text_len < MAX_TEXT_LENGTH -1) {
 				strcat(g->typing_buffer, e.text.text);
 				g->text_len += strlen(e.text.text);
-				//SDL_Log("text is \"%s\" \"%s\" %d %d\n", g->typing_buffer, composition, cursor, selection_len);
-				//SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "text is \"%s\" \"%s\" %d %d\n", text, composition, cursor, selection_len);
+				//SDL_Log("text is \"%s\" %d\n", g->typing_buffer, g->text_len);
 			}
 			break;
 
