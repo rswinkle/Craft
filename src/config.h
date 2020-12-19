@@ -1,6 +1,7 @@
 #ifndef _config_h_
 #define _config_h_
 
+// comment this out when building the lib for the server
 #include <SDL.h>
 
 // app parameters
