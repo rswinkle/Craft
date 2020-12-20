@@ -2413,9 +2413,11 @@ int handle_events(double dt)
 
 			case KEY_COMMAND:
 				g->typing = 1;
-				g->typing_buffer[0] = '/';
-				g->typing_buffer[1] = '\0';
-				g->text_len = 1;
+				// same as KEY_SIGN below
+				//g->typing_buffer[0] = '/';
+				//g->typing_buffer[1] = '\0';
+				g->typing_buffer[0] = '\0';
+				g->text_len = 0;
 				SDL_StartTextInput();
 				break;
 
@@ -3113,29 +3115,12 @@ int main(int argc, char **argv) {
     block_attrib.position = 0;
     block_attrib.normal = 1;
     block_attrib.uv = 2;
-    /*
-    block_attrib.position = glGetAttribLocation(program, "position");
-    block_attrib.normal = glGetAttribLocation(program, "normal");
-    block_attrib.uv = glGetAttribLocation(program, "uv");
-    block_attrib.matrix = glGetUniformLocation(program, "matrix");
-    block_attrib.sampler = glGetUniformLocation(program, "sampler");
-    block_attrib.extra1 = glGetUniformLocation(program, "sky_sampler");
-    block_attrib.extra2 = glGetUniformLocation(program, "daylight");
-    block_attrib.extra3 = glGetUniformLocation(program, "fog_distance");
-    block_attrib.extra4 = glGetUniformLocation(program, "ortho");
-    block_attrib.camera = glGetUniformLocation(program, "camera");
-    block_attrib.timer = glGetUniformLocation(program, "timer");
-    */
 
     program = pglCreateProgram(line_vs, line_fs, 0, interpolation, GL_FALSE);
     glUseProgram(program);
     set_uniform(&g->uniforms);
     line_attrib.program = program;
     line_attrib.position = 0;
-    /*
-    line_attrib.position = glGetAttribLocation(program, "position");
-    line_attrib.matrix = glGetUniformLocation(program, "matrix");
-    */
 
     program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_FALSE);
     glUseProgram(program);
@@ -3144,13 +3129,6 @@ int main(int argc, char **argv) {
     text_attrib.sampler = font_tex;
     text_attrib.position = 0;
     text_attrib.uv = 2;
-    /*
-    text_attrib.position = glGetAttribLocation(program, "position");
-    text_attrib.uv = glGetAttribLocation(program, "uv");
-    text_attrib.matrix = glGetUniformLocation(program, "matrix");
-    text_attrib.sampler = glGetUniformLocation(program, "sampler");
-    text_attrib.extra1 = glGetUniformLocation(program, "is_sign");
-    */
 
     program = pglCreateProgram(sky_vs, sky_fs, 2, interpolation, GL_FALSE);
     glUseProgram(program);
@@ -3160,14 +3138,6 @@ int main(int argc, char **argv) {
     sky_attrib.position = 0;
     sky_attrib.normal = 1;
     sky_attrib.uv = 2;
-    /*
-    sky_attrib.position = glGetAttribLocation(program, "position");
-    sky_attrib.normal = glGetAttribLocation(program, "normal");
-    sky_attrib.uv = glGetAttribLocation(program, "uv");
-    sky_attrib.matrix = glGetUniformLocation(program, "matrix");
-    sky_attrib.sampler = glGetUniformLocation(program, "sampler");
-    sky_attrib.timer = glGetUniformLocation(program, "timer");
-    */
 
     // add this here because we call handle_events after drawing currently
     // and it gets set in there so first frame crashes
@@ -3361,6 +3331,7 @@ int main(int argc, char **argv) {
                 }
             }
             if (g->typing) {
+                printf("%s\n", g->typing_buffer);
                 snprintf(text_buffer, 1024, "> %s", g->typing_buffer);
                 render_text(&text_attrib, ALIGN_LEFT, tx, ty, ts, text_buffer);
                 ty -= ts * 2;

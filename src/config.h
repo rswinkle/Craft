@@ -60,7 +60,11 @@
 #define KEY_ZOOM SDL_SCANCODE_LSHIFT
 #define KEY_ORTHO SDL_SCANCODE_F
 #define KEY_CHAT SDL_SCANCODE_T
+
+// TODO how to handle this since it should be keycode
+// while everything else I want unchangeable scancode
 #define KEY_COMMAND SDL_SCANCODE_SLASH
+
 #define KEY_SIGN SDL_SCANCODE_GRAVE
 
 enum {
