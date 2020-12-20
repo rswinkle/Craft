@@ -156,7 +156,7 @@ class Handler(socketserver.BaseRequestHandler):
                 except queue.Empty:
                     continue
                 data = ''.join(buf)
-                self.request.sendall(data)
+                self.request.sendall(bytes(data, 'utf-8'))
             except Exception:
                 self.request.close()
                 raise
