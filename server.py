@@ -114,7 +114,7 @@ class Handler(socketserver.BaseRequestHandler):
                 data = self.request.recv(BUFFER_SIZE)
                 if not data:
                     break
-                buf.extend(data.replace('\r\n', '\n'))
+                buf.extend(data.replace(b'\r\n', b'\n'))
                 while '\n' in buf:
                     index = buf.index('\n')
                     line = ''.join(buf[:index])
