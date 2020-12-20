@@ -7,7 +7,12 @@
 #include <time.h>
 #include "auth.h"
 #include "client.h"
+
+// still not sure the best way to handle the
+// command typing but for now...
+#define USING_DVORAK
 #include "config.h"
+
 #include "cube.h"
 #include "db.h"
 #include "item.h"
@@ -3332,7 +3337,7 @@ int main(int argc, char **argv) {
                 }
             }
             if (g->typing) {
-                printf("%s\n", g->typing_buffer);
+                //printf("%s\n", g->typing_buffer);
                 snprintf(text_buffer, 1024, "> %s", g->typing_buffer);
                 render_text(&text_attrib, ALIGN_LEFT, tx, ty, ts, text_buffer);
                 ty -= ts * 2;

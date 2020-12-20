@@ -47,6 +47,7 @@
 #define CRAFT_KEY_SIGN '`'
 
 // https://wiki.libsdl.org/SDL_Scancode?highlight=%28%5CbCategoryEnum%5Cb%29%7C%28CategoryKeyboard%29
+#ifndef USING_DVORAK
 #define KEY_FORWARD SDL_SCANCODE_W
 #define KEY_BACKWARD SDL_SCANCODE_S
 #define KEY_LEFT SDL_SCANCODE_A
@@ -60,12 +61,28 @@
 #define KEY_ZOOM SDL_SCANCODE_LSHIFT
 #define KEY_ORTHO SDL_SCANCODE_F
 #define KEY_CHAT SDL_SCANCODE_T
-
-// TODO how to handle this since it should be keycode
-// while everything else I want unchangeable scancode
 #define KEY_COMMAND SDL_SCANCODE_SLASH
-
 #define KEY_SIGN SDL_SCANCODE_GRAVE
+#else
+// change these if someone has an actual dvorak keyboard
+// rather than just using the layout. For now the
+// only difference is KEY_COMMAND
+#define KEY_FORWARD SDL_SCANCODE_W
+#define KEY_BACKWARD SDL_SCANCODE_S
+#define KEY_LEFT SDL_SCANCODE_A
+#define KEY_RIGHT SDL_SCANCODE_D
+#define KEY_JUMP SDL_SCANCODE_SPACE
+#define KEY_FLY SDL_SCANCODE_TAB
+#define KEY_OBSERVE SDL_SCANCODE_O
+#define KEY_OBSERVE_INSET SDL_SCANCODE_P
+#define KEY_ITEM_NEXT SDL_SCANCODE_E
+#define KEY_ITEM_PREV SDL_SCANCODE_R
+#define KEY_ZOOM SDL_SCANCODE_LSHIFT
+#define KEY_ORTHO SDL_SCANCODE_F
+#define KEY_CHAT SDL_SCANCODE_T
+#define KEY_COMMAND SDL_SCANCODE_LEFTBRACKET
+#define KEY_SIGN SDL_SCANCODE_GRAVE
+#endif
 
 enum {
 	FORWARD,
