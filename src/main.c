@@ -8,7 +8,12 @@
 #include <time.h>
 #include "auth.h"
 #include "client.h"
+
+// still not sure the best way to handle the
+// command typing but for now...
+#define USING_DVORAK
 #include "config.h"
+
 #include "cube.h"
 #include "db.h"
 #include "item.h"
@@ -2224,8 +2229,9 @@ int handle_events(double dt)
 					g->typing = 0;
 				} else if (exclusive) {
 					SDL_SetRelativeMouseMode(SDL_FALSE);
+				} else {
+					return 1;
 				}
-				return 1;
 				break;
 			}
 			break;
@@ -2346,6 +2352,7 @@ int handle_events(double dt)
 				break;
 
 			case KEY_COMMAND:
+				g->typing = 1;
 				g->typing_buffer[0] = '\0';
 				SDL_StartTextInput();
 				break;
@@ -2372,20 +2379,22 @@ int handle_events(double dt)
 			break;
 
 		case SDL_MOUSEMOTION:
-			s->rx += e.motion.xrel * m;
-			if (INVERT_MOUSE) {
-				s->ry += e.motion.yrel * m;
-			} else {
-				s->ry -= e.motion.yrel * m;
+			if (exclusive) {
+				s->rx += e.motion.xrel * m;
+				if (INVERT_MOUSE) {
+					s->ry += e.motion.yrel * m;
+				} else {
+					s->ry -= e.motion.yrel * m;
+				}
+				if (s->rx < 0) {
+					s->rx += RADIANS(360);
+				}
+				if (s->rx >= RADIANS(360)){
+					s->rx -= RADIANS(360);
+				}
+				s->ry = MAX(s->ry, -RADIANS(90));
+				s->ry = MIN(s->ry, RADIANS(90));
 			}
-			if (s->rx < 0) {
-				s->rx += RADIANS(360);
-			}
-			if (s->rx >= RADIANS(360)){
-				s->rx -= RADIANS(360);
-			}
-			s->ry = MAX(s->ry, -RADIANS(90));
-			s->ry = MIN(s->ry, RADIANS(90));
 			break;
 
 		case SDL_MOUSEBUTTONDOWN:
