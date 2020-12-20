@@ -155,6 +155,7 @@ typedef struct {
     int day_length;
     int time_changed;
     int start_time;
+    int start_ticks;
     My_Uniforms uniforms;
     Block block0;
     Block block1;
@@ -171,9 +172,7 @@ int chunked(float x) {
 
 double get_time()
 {
-    // start at 8 am
-    int start8 = (g->day_length / 3)*1000;
-    return (SDL_GetTicks()+start8 - g->start_time)/1000.0;
+    return (SDL_GetTicks()+g->start_time - g->start_ticks)/1000.0;
 }
 
 float time_of_day() {
@@ -2792,6 +2791,8 @@ void create_window() {
 		exit(0);
 	}
 	// TODO FULLSCREEN
+	
+	g->start_ticks = SDL_GetTicks();
 
 	g->ren = NULL;
 	g->tex = NULL;
@@ -3033,7 +3034,7 @@ void reset_model() {
     memset(g->messages, 0, sizeof(char) * MAX_MESSAGES * MAX_TEXT_LENGTH);
     g->message_index = 0;
     g->day_length = DAY_LENGTH;
-    g->start_time = SDL_GetTicks(); //(g->day_length / 3)*1000;
+    g->start_time = (g->day_length / 3)*1000;
     g->time_changed = 1;
 }
 
