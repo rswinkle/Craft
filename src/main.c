@@ -150,6 +150,7 @@ typedef struct {
     int day_length;
     int time_changed;
     int start_time;
+    int start_ticks;
     Block block0;
     Block block1;
     Block copy0;
@@ -165,7 +166,7 @@ int chunked(float x) {
 
 double get_time()
 {
-	return (SDL_GetTicks() - g->start_time)/1000.0;
+	return (SDL_GetTicks() + g->start_time - g->start_ticks)/1000.0;
 }
 
 float time_of_day() {
@@ -2345,18 +2346,13 @@ int handle_events(double dt)
 				break;
 
 			case KEY_COMMAND:
-				g->typing = 1;
-				g->typing_buffer[0] = '/';
-				g->typing_buffer[1] = '\0';
-				g->text_len = 1;
+				g->typing_buffer[0] = '\0';
 				SDL_StartTextInput();
 				break;
 
 			case KEY_SIGN:
 				g->typing = 1;
-				// make sure KEY_SIGN matches CRAFT_KEY_SIGN
-				g->typing_buffer[0] = CRAFT_KEY_SIGN;
-				g->typing_buffer[1] = '\0';
+				g->typing_buffer[0] = '\0';
 				SDL_StartTextInput();
 				break;
 
@@ -2696,6 +2692,7 @@ void create_window() {
 		exit(0);
 	}
 	// TODO FULLSCREEN
+	g->start_ticks = SDL_GetTicks();
 
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
@@ -2940,6 +2937,7 @@ void reset_model() {
     g->message_index = 0;
     g->day_length = DAY_LENGTH;
     g->start_time = (g->day_length / 3)*1000;
+    // maybe set start_ticks here?
     g->time_changed = 1;
 }
 
