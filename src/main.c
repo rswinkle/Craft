@@ -2516,13 +2516,13 @@ int handle_events(double dt)
 				// This is roughly what would be needed, and it's what I have
 				// in a couple PortableGL demos but clearly I'm missing something,
 				// some extra state/dependency, since it doesn't work here
-				//g->width = e.window.data1;
-				//g->height = e.window.data2;
-				//resize_framebuffer(g->width, g->height);
+				g->width = e.window.data1;
+				g->height = e.window.data2;
+				resize_framebuffer(g->width, g->height);
 				//g->scale = get_scale_factor();
 				//glViewport(0, 0, g->width, g->height);
-				//SDL_DestroyTexture(g->tex);
-				//g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g->width, g->height);
+				SDL_DestroyTexture(g->tex);
+				g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g->width, g->height);
 
 				break;
 			}
@@ -3235,8 +3235,8 @@ int main(int argc, char **argv) {
         while (1) {
             // WINDOW SIZE AND SCALE //
             // TODO move to handle_events, only recalc on resize
-            //g->scale = get_scale_factor();
-            //glViewport(0, 0, g->width, g->height);
+			g->scale = get_scale_factor();
+			glViewport(0, 0, g->width, g->height);
 
             // FRAME RATE //
             if (g->time_changed) {
@@ -3393,7 +3393,7 @@ int main(int argc, char **argv) {
 
             // SWAP AND POLL //
             //SDL_GL_SwapWindow(g->window);
-            SDL_UpdateTexture(g->tex, NULL, g->bbufpix, WINDOW_WIDTH * sizeof(u32));
+            SDL_UpdateTexture(g->tex, NULL, g->bbufpix, g->width * sizeof(u32));
             //Render the scene
             SDL_RenderCopy(g->ren, g->tex, NULL, NULL);
             SDL_RenderPresent(g->ren);
