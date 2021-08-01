@@ -74,7 +74,11 @@ as needed:
     // NOPERSPECTIVE for each float being interpolated between the
     // vertex and fragment shaders
 
-    // the last parameter is whether the fragment shader writes to gl_FragDepth
+    // the last parameter is whether the fragment shader writes to
+    // gl_FragDepth or discard, but it's not currently used.  In the future I may
+    // have a macro that enables early depth testing *if* that parameter is
+    // false for a minor performance boost but canonicaly depth test happens
+    // after frag shader (and scissoring)
     GLenum interpolation[4] = { SMOOTH, SMOOTH, SMOOTH, SMOOTH };
     GLuint myshader = pglCreateProgram(smooth_vs, smooth_fs, 4, interpolation, GL_FALSE);
     glUseProgram(myshader);
@@ -82,7 +86,7 @@ as needed:
     My_Uniform the_uniforms;
     set_uniform(&the_uniforms);
 
-    the_uniforms.v_color = Red;
+    the_uniforms.v_color = Red; // not actually used, using per vert color
     memcpy(the_uniforms.mvp_mat, identity, sizeof(mat4));
 
     // Your standard OpenGL buffer setup etc. here
@@ -116,15 +120,16 @@ as needed:
         builtins->gl_FragColor = ((vec4*)fs_input)[0];
     }
 
-    // note smooth is the default so this same as smooth out vec4 vary_color
+    // note smooth is the default so this is the same as smooth out vec4 vary_color
     // https://www.khronos.org/opengl/wiki/Type_Qualifier_(GLSL)#Interpolation_qualifiers 
+    uniform mvp_mat
     layout (location = 0) in vec4 in_vertex;
     layout (location = 1) in vec4 in_color;
     out vec4 vary_color;
     void main(void)
     {
         vary_color = in_color;
-        gl_Position = in_vertex;
+        gl_Position = mvp_mat * in_vertex;
     }
 
     in vec4 vary_color;
@@ -1822,6 +1827,8 @@ void cvec_free_float(void* vec)
 
 typedef uint32_t GLuint;
 typedef int32_t  GLint;
+typedef int64_t  GLint64;
+typedef uint64_t GLuint64;
 typedef uint16_t GLushort;
 typedef int16_t  GLshort;
 typedef uint8_t  GLubyte;
@@ -1889,7 +1896,7 @@ enum
 	GL_TRIANGLES_AJACENCY,
 	GL_TRIANGLE_STRIP_AJACENCY,
 
-	//depth functions
+	//depth functions (and stencil funcs)
 	GL_LESS,
 	GL_LEQUAL,
 	GL_GREATER,
@@ -2011,13 +2018,12 @@ enum
 	GL_CULL_FACE,
 	GL_DEPTH_TEST,
 	GL_DEPTH_CLAMP,
-	GL_LINE_SMOOTH,  // sort of, it just draws a thicker line really
+	GL_LINE_SMOOTH,  // TODO correctly
 	GL_BLEND,
-
-	// TODO glEnable options
 	GL_COLOR_LOGIC_OP,
 	GL_POLYGON_OFFSET_FILL,
 	GL_SCISSOR_TEST,
+	GL_STENCIL_TEST,
 
 	//provoking vertex
 	GL_FIRST_VERTEX_CONVENTION,
@@ -2041,7 +2047,6 @@ enum
 	GL_COPY,
 	GL_COPY_INVERTED,
 	GL_NOOP,
-	GL_INVERT,
 	GL_AND,
 	GL_NAND,
 	GL_OR,
@@ -2052,6 +2057,17 @@ enum
 	GL_AND_INVERTED,
 	GL_OR_REVERSE,
 	GL_OR_INVERTED,
+	GL_INVERT,
+
+	// glStencilOp
+	GL_KEEP,
+	//GL_ZERO, already defined in blend functions aggh
+	GL_REPLACE,
+	GL_INCR,
+	GL_INCR_WRAP,
+	GL_DECR,
+	GL_DECR_WRAP,
+	//GL_INVERT,   // already defined in LogicOps
 
 	//data types
 	GL_UNSIGNED_BYTE,
@@ -2069,6 +2085,44 @@ enum
 	GL_VERSION,
 	GL_SHADING_LANGUAGE_VERSION,
 
+	// glGet enums
+	GL_POLYGON_OFFSET_FACTOR,
+	GL_POLYGON_OFFSET_UNITS,
+	GL_POINT_SIZE,
+	GL_DEPTH_CLEAR_VALUE,
+	GL_DEPTH_RANGE,
+	GL_STENCIL_WRITE_MASK,
+	GL_STENCIL_REF,
+	GL_STENCIL_VALUE_MASK,
+	GL_STENCIL_FUNC,
+	GL_STENCIL_FAIL,
+	GL_STENCIL_PASS_DEPTH_FAIL,
+	GL_STENCIL_PASS_DEPTH_PASS,
+
+	GL_STENCIL_BACK_WRITE_MASK,
+	GL_STENCIL_BACK_REF,
+	GL_STENCIL_BACK_VALUE_MASK,
+	GL_STENCIL_BACK_FUNC,
+	GL_STENCIL_BACK_FAIL,
+	GL_STENCIL_BACK_PASS_DEPTH_FAIL,
+	GL_STENCIL_BACK_PASS_DEPTH_PASS,
+
+	GL_LOGIC_OP_MODE,
+	GL_BLEND_SRC_RGB,
+	GL_BLEND_SRC_ALPHA,
+	GL_BLEND_DST_RGB,
+	GL_BLEND_DST_ALPHA,
+
+	GL_BLEND_EQUATION_RGB,
+	GL_BLEND_EQUATION_ALPHA,
+
+	GL_CULL_FACE_MODE,
+	GL_FRONT_FACE,
+	GL_DEPTH_FUNC,
+	//GL_POINT_SPRITE_COORD_ORIGIN,
+	GL_PROVOKING_VERTEX,
+
+	GL_POLYGON_MODE,
 
 	//shader types etc. not used, just here for compatibility add what you
 	//need so you can use your OpenGL code with PortableGL with minimal changes
@@ -2143,7 +2197,12 @@ typedef struct glProgram
 	void* uniform;
 	int vs_output_size;
 	GLenum interpolation[GL_MAX_VERTEX_OUTPUT_COMPONENTS];
-	GLboolean use_frag_depth;
+
+	// Need to come up with a better name to mean "I write to glFragDepth or discard
+	// pixels in this shader so you can't do pre-shader depth testing... not that I currently
+	// support that anyway at this point but maybe eventually
+	GLboolean fragdepth_or_discard;
+
 	GLboolean deleted;
 
 } glProgram;
@@ -2203,14 +2262,18 @@ typedef struct glTexture
 	unsigned int d;
 
 	int base_level;
-//	vec4 border_color;
+//	vec4 border_color; // no longer support borders not worth it
 	GLenum mag_filter;
 	GLenum min_filter;
 	GLenum wrap_s;
 	GLenum wrap_t;
 	GLenum wrap_r;
 
-	GLenum type;
+	// TODO?
+	//GLenum datatype; // only support GL_UNSIGNED_BYTE so not worth having yet
+	GLenum format; // GL_RED, GL_RG, GL_RGB/BGR, GL_RGBA/BGRA
+	
+	GLenum type; // GL_TEXTURE_UNBOUND, GL_TEXTURE_2D etc.
 
 	GLboolean deleted;
 	GLboolean mapped;
@@ -4061,16 +4124,35 @@ typedef struct glContext
 	Vertex_Shader_output vs_output;
 	float fs_input[GL_MAX_VERTEX_OUTPUT_COMPONENTS];
 
-	unsigned int provoking_vert;
 	GLboolean depth_test;
 	GLboolean line_smooth;
 	GLboolean cull_face;
-	GLboolean frag_depth_used;
+	GLboolean fragdepth_or_discard;
 	GLboolean depth_clamp;
+	GLboolean depth_mask;
 	GLboolean blend;
 	GLboolean logic_ops;
 	GLboolean poly_offset;
 	GLboolean scissor_test;
+
+	// stencil test requires a lot of state, especially for
+	// something that I think will rarely be used... is it even worth having?
+	GLboolean stencil_test;
+	GLuint stencil_writemask;
+	GLuint stencil_writemask_back;
+	GLint stencil_ref;
+	GLint stencil_ref_back;
+	GLuint stencil_valuemask;
+	GLuint stencil_valuemask_back;
+	GLenum stencil_func;
+	GLenum stencil_func_back;
+	GLenum stencil_sfail;
+	GLenum stencil_dpfail;
+	GLenum stencil_dppass;
+	GLenum stencil_sfail_back;
+	GLenum stencil_dpfail_back;
+	GLenum stencil_dppass_back;
+
 	GLenum logic_func;
 	GLenum blend_sfactor;
 	GLenum blend_dfactor;
@@ -4081,6 +4163,7 @@ typedef struct glContext
 	GLenum poly_mode_back;
 	GLenum depth_func;
 	GLenum point_spr_origin;
+	GLenum provoking_vert;
 
 	// I really need to decide whether to use GLtypes or plain C types
 	GLfloat poly_factor;
@@ -4094,18 +4177,20 @@ typedef struct glContext
 	GLint unpack_alignment;
 	GLint pack_alignment;
 
+	GLint clear_stencil;
 	Color clear_color;
 	vec4 blend_color;
-	float point_size;
-	float clear_depth;
-	float depth_range_near;
-	float depth_range_far;
+	GLfloat point_size;
+	GLfloat clear_depth;
+	GLfloat depth_range_near;
+	GLfloat depth_range_far;
 
 	draw_triangle_func draw_triangle_front;
 	draw_triangle_func draw_triangle_back;
 
 	glFramebuffer zbuf;
 	glFramebuffer back_buffer;
+	glFramebuffer stencil_buf;
 
 	int bitdepth;
 	u32 Rmask;
@@ -4137,6 +4222,8 @@ int clampi(int i, int min, int max);
 vec4 texture1D(GLuint tex, float x);
 vec4 texture2D(GLuint tex, float x, float y);
 vec4 texture3D(GLuint tex, float x, float y, float z);
+vec4 texture2DArray(GLuint tex, float x, float y, int z);
+vec4 texture_rect(GLuint tex, float x, float y);
 vec4 texture_cubemap(GLuint texture, float x, float y, float z);
 
 
@@ -4148,19 +4235,25 @@ vec4 texture_cubemap(GLuint texture, float x, float y, float z);
 int init_glContext(glContext* c, u32** back_buffer, int w, int h, int bitdepth, u32 Rmask, u32 Gmask, u32 Bmask, u32 Amask);
 void free_glContext(glContext* context);
 void set_glContext(glContext* context);
-
-
 void resize_framebuffer(size_t w, size_t h);
+
 void glViewport(int x, int y, GLsizei width, GLsizei height);
 
 
 GLubyte* glGetString(GLenum name);
 GLenum glGetError();
+void glGetBooleanv(GLenum pname, GLboolean* params);
+void glGetDoublev(GLenum pname, GLdouble* params);
+void glGetFloatv(GLenum pname, GLfloat* params);
+void glGetIntegerv(GLenum pname, GLint* params);
+void glGetInteger64v(GLenum pname, GLint64* params);
+GLboolean glIsEnabled(GLenum cap);
 
 void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 void glClearDepth(GLclampf depth);
 void glDepthFunc(GLenum func);
 void glDepthRange(GLclampf nearVal, GLclampf farVal);
+void glDepthMask(GLboolean flag);
 void glBlendFunc(GLenum sfactor, GLenum dfactor);
 void glBlendEquation(GLenum mode);
 void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
@@ -4177,6 +4270,13 @@ void glLineWidth(GLfloat width);
 void glLogicOp(GLenum opcode);
 void glPolygonOffset(GLfloat factor, GLfloat units);
 void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
+void glStencilFunc(GLenum func, GLint ref, GLuint mask);
+void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
+void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass);
+void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass);
+void glClearStencil(GLint s);
+void glStencilMask(GLuint mask);
+void glStencilMaskSeparate(GLenum face, GLuint mask);
 
 //textures
 void glGenTextures(GLsizei n, GLuint* textures);
@@ -4216,7 +4316,7 @@ void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type
 
 
 //shaders
-GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean use_frag_depth);
+GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard);
 void glDeleteProgram(GLuint program);
 void glUseProgram(GLuint program);
 
@@ -7187,9 +7287,9 @@ static inline int gl_clipcode(vec4 pt)
 	w = pt.w * (1.0 + CLIP_EPSILON);
 	return
 		(((pt.z < -w) |
-		( (pt.z >  w) << 1)) &
-		(!c->depth_clamp |
-		 !c->depth_clamp << 1)) |
+		 ((pt.z >  w) << 1)) &
+		 (!c->depth_clamp |
+		  !c->depth_clamp << 1)) |
 
 		((pt.x < -w) << 2) |
 		((pt.x >  w) << 3) |
@@ -7241,6 +7341,7 @@ static void do_vertex(glVertex_Attrib* v, int* enabled, unsigned int num_enabled
 	u8* buf_pos;
 	vec4 tmpvec4;
 
+	// copy/prep vertex attributes from buffers into appropriate positions for vertex shader to access
 	for (int j=0; j<num_enabled; ++j) {
 		buf = v[enabled[j]].buf;
 
@@ -7281,7 +7382,7 @@ static void vertex_stage(GLint first, GLsizei count, GLsizei instance_id, GLuint
 		memcpy(&c->vertex_attribs_vs[i], vec4_init, sizeof(vec4));
 
 		if (v[i].enabled) {
- 		   	if (v[i].divisor == 0) {
+			if (v[i].divisor == 0) {
 				enabled[j++] = i;
 				//printf("%d is enabled\n", i);
 			} else if (!(instance_id % v[i].divisor)) {   //set instanced attributes if necessary
@@ -7290,7 +7391,7 @@ static void vertex_stage(GLint first, GLsizei count, GLsizei instance_id, GLuint
 
 				SET_VEC4(tmpvec4, 0.0f, 0.0f, 0.0f, 1.0f);
 
-				memcpy(&tmpvec4, buf_pos, sizeof(float)*v[enabled[j]].size); //TODO why v[enabled[j]].size and not just v[i].size?
+				memcpy(&tmpvec4, buf_pos, sizeof(float)*v[enabled[j]].size); //TODO why do I have v[enabled[j]].size and not just v[i].size?
 
 				//c->cur_vertex_array->vertex_attribs[enabled[j]].buf->data;
 
@@ -7337,14 +7438,13 @@ static void draw_point(glVertex* vert)
 	point.z = MAP(point.z, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
 
 	//TODO not sure if I'm supposed to do this ... doesn't say to in spec but it is called depth clamping
+	//but I don't do it for lines or triangles (at least in fill or line mode)
 	if (c->depth_clamp)
 		point.z = clampf_01(point.z);
 
 	//TODO why not just pass vs_output directly?  hmmm...
 	memcpy(fs_input, vert->vs_out, c->vs_output.size*sizeof(float));
 
-	//TODO set other builtins, FragCoord  etc.
-	//
 	//accounting for pixel centers at 0.5, using truncation
 	float x = point.x + 0.5f;
 	float y = point.y + 0.5f;
@@ -7358,7 +7458,9 @@ static void draw_point(glVertex* vert)
 			c->builtins.gl_PointCoord.x = 0.5f + ((int)j + 0.5f - point.x)/p_size;
 			c->builtins.gl_PointCoord.y = 0.5f + origin * ((int)i + 0.5f - point.y)/p_size;
 
+			SET_VEC4(c->builtins.gl_FragCoord, j, i, point.z, 1/vert->screen_space.w);
 			c->builtins.discard = GL_FALSE;
+			c->builtins.gl_FragDepth = point.z;
 			c->programs.a[c->cur_program].fragment_shader(fs_input, &c->builtins, c->programs.a[c->cur_program].uniform);
 			if (!c->builtins.discard)
 				draw_pixel(c->builtins.gl_FragColor, j, i);
@@ -7433,6 +7535,11 @@ static void run_pipeline(GLenum mode, GLint first, GLsizei count, GLsizei instan
 
 static int depthtest(float zval, float zbufval)
 {
+	// TODO not sure if I should do this since it's supposed to prevent writing to the buffer
+	// but not afaik, change the result of the test
+	if (!c->depth_mask)
+		return 0;
+
 	switch (c->depth_func) {
 	case GL_LESS:
 		return zval < zbufval;
@@ -7637,7 +7744,7 @@ static void draw_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, uns
 
 	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
 	void* uniform = c->programs.a[c->cur_program].uniform;
-	int frag_depth_used = c->programs.a[c->cur_program].use_frag_depth;
+	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
 
 	float i_x1, i_y1, i_x2, i_y2;
 	i_x1 = floor(p1.x) + 0.5;
@@ -7674,6 +7781,8 @@ static void draw_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, uns
 			w = (1 - t) * w1 + t * w2;
 
 			SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+			c->builtins.discard = GL_FALSE;
+			c->builtins.gl_FragDepth = z;
 			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
 			fragment_shader(c->fs_input, &c->builtins, uniform);
 			if (!c->builtins.discard)
@@ -7694,6 +7803,8 @@ line_1:
 			w = (1 - t) * w1 + t * w2;
 
 			SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+			c->builtins.discard = GL_FALSE;
+			c->builtins.gl_FragDepth = z;
 			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
 			fragment_shader(c->fs_input, &c->builtins, uniform);
 			if (!c->builtins.discard)
@@ -7714,6 +7825,8 @@ line_2:
 			w = (1 - t) * w1 + t * w2;
 
 			SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+			c->builtins.discard = GL_FALSE;
+			c->builtins.gl_FragDepth = z;
 			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
 			fragment_shader(c->fs_input, &c->builtins, uniform);
 			if (!c->builtins.discard)
@@ -7735,6 +7848,8 @@ line_3:
 			w = (1 - t) * w1 + t * w2;
 
 			SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+			c->builtins.discard = GL_FALSE;
+			c->builtins.gl_FragDepth = z;
 			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
 			fragment_shader(c->fs_input, &c->builtins, uniform);
 			if (!c->builtins.discard)
@@ -7747,7 +7862,7 @@ line_4:
 	}
 }
 
-// WARNING: this function is subject to serious change or removal
+// WARNING: this function is subject to serious change or removal and is currently unused (GL_LINE_SMOOTH unsupported)
 // TODO do it right, handle depth test correctly since we moved it into draw_pixel
 static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, unsigned int provoke)
 {
@@ -7756,7 +7871,7 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 
 	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
 	void* uniform = c->programs.a[c->cur_program].uniform;
-	int frag_depth_used = c->programs.a[c->cur_program].use_frag_depth;
+	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
 
 	vec3 hp1 = vec4_to_vec3h(v1);
 	vec3 hp2 = vec4_to_vec3h(v2);
@@ -7815,10 +7930,10 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 	//choose to compare against just one pixel for depth test instead of both
 	z1 = MAP(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
 	if (steep) {
-		if (!c->depth_test || (!frag_depth_used &&
+		if (!c->depth_test || (!fragdepth_or_discard &&
 			depthtest(z1, ((float*)c->zbuf.lastrow)[-(int)xpxl1*c->zbuf.w + (int)ypxl1]))) {
 
-			if (!c->frag_depth_used && c->depth_test) { //hate this double check but depth buf is only update if enabled
+			if (!c->fragdepth_or_discard && c->depth_test) { //hate this double check but depth buf is only update if enabled
 				((float*)c->zbuf.lastrow)[-(int)xpxl1*c->zbuf.w + (int)ypxl1] = z1;
 				((float*)c->zbuf.lastrow)[-(int)xpxl1*c->zbuf.w + (int)(ypxl1+1)] = z1;
 			}
@@ -7838,10 +7953,10 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 				draw_pixel(c->builtins.gl_FragColor, ypxl1+1, xpxl1);
 		}
 	} else {
-		if (!c->depth_test || (!frag_depth_used &&
+		if (!c->depth_test || (!fragdepth_or_discard &&
 			depthtest(z1, ((float*)c->zbuf.lastrow)[-(int)ypxl1*c->zbuf.w + (int)xpxl1]))) {
 
-			if (!c->frag_depth_used && c->depth_test) { //hate this double check but depth buf is only update if enabled
+			if (!c->fragdepth_or_discard && c->depth_test) { //hate this double check but depth buf is only update if enabled
 				((float*)c->zbuf.lastrow)[-(int)ypxl1*c->zbuf.w + (int)xpxl1] = z1;
 				((float*)c->zbuf.lastrow)[-(int)(ypxl1+1)*c->zbuf.w + (int)xpxl1] = z1;
 			}
@@ -7876,10 +7991,10 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 
 	z2 = MAP(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
 	if (steep) {
-		if (!c->depth_test || (!frag_depth_used &&
+		if (!c->depth_test || (!fragdepth_or_discard &&
 			depthtest(z2, ((float*)c->zbuf.lastrow)[-(int)xpxl2*c->zbuf.w + (int)ypxl2]))) {
 
-			if (!c->frag_depth_used && c->depth_test) {
+			if (!c->fragdepth_or_discard && c->depth_test) {
 				((float*)c->zbuf.lastrow)[-(int)xpxl2*c->zbuf.w + (int)ypxl2] = z2;
 				((float*)c->zbuf.lastrow)[-(int)xpxl2*c->zbuf.w + (int)(ypxl2+1)] = z2;
 			}
@@ -7900,10 +8015,10 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 		}
 
 	} else {
-		if (!c->depth_test || (!frag_depth_used &&
+		if (!c->depth_test || (!fragdepth_or_discard &&
 			depthtest(z2, ((float*)c->zbuf.lastrow)[-(int)ypxl2*c->zbuf.w + (int)xpxl2]))) {
 
-			if (!c->frag_depth_used && c->depth_test) {
+			if (!c->fragdepth_or_discard && c->depth_test) {
 				((float*)c->zbuf.lastrow)[-(int)ypxl2*c->zbuf.w + (int)xpxl2] = z2;
 				((float*)c->zbuf.lastrow)[-(int)(ypxl2+1)*c->zbuf.w + (int)xpxl2] = z2;
 			}
@@ -7935,7 +8050,7 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 		w = (1 - t) * w1 + t * w2;
 
 		if (steep) {
-			if (!c->frag_depth_used && c->depth_test) {
+			if (!c->fragdepth_or_discard && c->depth_test) {
 				if (!depthtest(z, ((float*)c->zbuf.lastrow)[-(int)x*c->zbuf.w + (int)intery])) {
 					continue;
 				} else {
@@ -7959,7 +8074,7 @@ static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_o
 				draw_pixel(c->builtins.gl_FragColor, intery+1, x);
 
 		} else {
-			if (!c->frag_depth_used && c->depth_test) {
+			if (!c->fragdepth_or_discard && c->depth_test) {
 				if (!depthtest(z, ((float*)c->zbuf.lastrow)[-(int)intery*c->zbuf.w + (int)x])) {
 					continue;
 				} else {
@@ -8371,8 +8486,10 @@ static void draw_triangle_fill(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 						}
 					}
 
-					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1);
+					// tmp2 is 1/w interpolated... I now do that everywhere (draw_line, draw_point)
+					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, tmp2);
 					c->builtins.discard = GL_FALSE;
+					c->builtins.gl_FragDepth = z;
 					c->programs.a[c->cur_program].fragment_shader(fs_input, &c->builtins, c->programs.a[c->cur_program].uniform);
 					if (!c->builtins.discard) {
 
@@ -8524,6 +8641,68 @@ static Color logic_ops_pixel(Color s, Color d)
 
 }
 
+static int stencil_test(u8 stencil)
+{
+	int func, ref, mask;
+	// TODO what about non-triangles, should use front values, so need to make sure that's set?
+	if (c->builtins.gl_FrontFacing) {
+		func = c->stencil_func;
+		ref = c->stencil_ref;
+		mask = c->stencil_valuemask;
+	} else {
+		func = c->stencil_func_back;
+		ref = c->stencil_ref_back;
+		mask = c->stencil_valuemask_back;
+	}
+	switch (func) {
+	case GL_NEVER:    return 0;
+	case GL_LESS:     return (ref & mask) < (stencil & mask);
+	case GL_LEQUAL:   return (ref & mask) <= (stencil & mask);
+	case GL_GREATER:  return (ref & mask) > (stencil & mask);
+	case GL_GEQUAL:   return (ref & mask) >= (stencil & mask);
+	case GL_EQUAL:    return (ref & mask) == (stencil & mask);
+	case GL_NOTEQUAL: return (ref & mask) != (stencil & mask);
+	case GL_ALWAYS:   return 1;
+	default:
+		puts("Error: unrecognized stencil function!");
+		return 0;
+	}
+
+}
+
+static void stencil_op(int stencil, int depth, u8* dest)
+{
+	int op, ref, mask;
+	// make them proper arrays in gl_context?
+	GLenum* ops;
+	// TODO what about non-triangles, should use front values, so need to make sure that's set?
+	if (c->builtins.gl_FrontFacing) {
+		ops = &c->stencil_sfail;
+		ref = c->stencil_ref;
+		mask = c->stencil_writemask;
+	} else {
+		ops = &c->stencil_sfail_back;
+		ref = c->stencil_ref_back;
+		mask = c->stencil_writemask_back;
+	}
+	op = (!stencil) ? ops[0] : ((!depth) ? ops[1] : ops[2]);
+
+	u8 val = *dest;
+	switch (op) {
+	case GL_KEEP: return;
+	case GL_ZERO: val = 0; break;
+	case GL_REPLACE: val = ref; break;
+	case GL_INCR: if (val < 255) val++; break;
+	case GL_INCR_WRAP: val++; break;
+	case GL_DECR: if (val > 0) val--; break;
+	case GL_DECR_WRAP: val--; break;
+	case GL_INVERT: val = ~val;
+	}
+
+	*dest = val & mask;
+
+}
+
 static void draw_pixel_vec2(vec4 cf, vec2 pos)
 {
 /*
@@ -8552,21 +8731,36 @@ static void draw_pixel(vec4 cf, int x, int y)
 	}
 
 	//MSAA
-	//Stencil Test
+	
+	//Stencil Test TODO have to handle when there is no stencil or depth buffer 
+	//(change gl_init to make stencil and depth buffers optional)
+	u8* stencil_dest = &c->stencil_buf.lastrow[-y*c->stencil_buf.w + x];
+	if (c->stencil_test) {
+		if (!stencil_test(*stencil_dest)) {
+			stencil_op(0, 1, stencil_dest);
+			return;
+		}
+	}
+	
 
 	//Depth test if necessary
 	if (c->depth_test) {
-		// TODO maybe I should make gl_FragDepth read/write, ie set to same as gl_FragCoord.z
-		// so I can jut always use gl_FragDepth
+		// I made gl_FragDepth read/write, ie same == to gl_FragCoord.z going into the shader
+		// so I can just always use gl_FragDepth here
 		float dest_depth = ((float*)c->zbuf.lastrow)[-y*c->zbuf.w + x];
-		float src_depth = c->builtins.gl_FragCoord.z;  // pass as parameter, or move whole depth testout of draw_pixel?
-		if (c->frag_depth_used)
-			src_depth = c->builtins.gl_FragDepth;
+		float src_depth = c->builtins.gl_FragDepth;  // pass as parameter?
 
-		if (!depthtest(src_depth, dest_depth)) {
+		int depth_result = depthtest(src_depth, dest_depth);
+
+		if (c->stencil_test) {
+			stencil_op(1, depth_result, stencil_dest);
+		}
+		if (!depth_result) {
 			return;
 		}
 		((float*)c->zbuf.lastrow)[-y*c->zbuf.w + x] = src_depth;
+	} else if (c->stencil_test) {
+		stencil_op(1, 1, stencil_dest);
 	}
 
 	//Blending
@@ -8707,6 +8901,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	if (bitdepth > 32 || !back)
 		return 0;
 
+	void* user_alloced = *back;
 	if (!*back) {
 		int bytes_per_pixel = (bitdepth + CHAR_BIT-1) / CHAR_BIT;
 		*back = (u32*) malloc(w * h * bytes_per_pixel);
@@ -8715,8 +8910,23 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	}
 
 	context->zbuf.buf = (u8*) malloc(w*h * sizeof(float));
-	if (!context->zbuf.buf)
+	if (!context->zbuf.buf) {
+		if (!user_alloced) {
+			free(*back);
+			*back = NULL;
+		}
 		return 0;
+	}
+
+	context->stencil_buf.buf = (u8*) malloc(w*h);
+	if (!context->stencil_buf.buf) {
+		if (!user_alloced) {
+			free(*back);
+			*back = NULL;
+		}
+		free(context->zbuf.buf);
+		return 0;
+	}
 
 	context->x_min = 0;
 	context->y_min = 0;
@@ -8726,6 +8936,10 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	context->zbuf.w = w;
 	context->zbuf.h = h;
 	context->zbuf.lastrow = context->zbuf.buf + (h-1)*w*sizeof(float);
+
+	context->stencil_buf.w = w;
+	context->stencil_buf.h = h;
+	context->stencil_buf.lastrow = context->stencil_buf.buf + (h-1)*w;
 
 	context->back_buffer.w = w;
 	context->back_buffer.h = h;
@@ -8753,6 +8967,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	cvec_float(&context->vs_output.output_buf, 0, 0);
 
 
+	context->clear_stencil = 0;
 	context->clear_color = make_Color(0, 0, 0, 0);
 	SET_VEC4(context->blend_color, 0, 0, 0, 0);
 	context->point_size = 1.0f;
@@ -8769,12 +8984,29 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	context->cull_face = GL_FALSE;
 	context->front_face = GL_CCW;
 	context->depth_test = GL_FALSE;
-	context->frag_depth_used = GL_FALSE;
+	context->fragdepth_or_discard = GL_FALSE;
 	context->depth_clamp = GL_FALSE;
+	context->depth_mask = GL_TRUE;
 	context->blend = GL_FALSE;
 	context->logic_ops = GL_FALSE;
 	context->poly_offset = GL_FALSE;
 	context->scissor_test = GL_FALSE;
+
+	context->stencil_test = GL_FALSE;
+	context->stencil_writemask = -1; // all 1s for the masks
+	context->stencil_ref = 0;
+	context->stencil_ref_back = 0;
+	context->stencil_valuemask = -1;
+	context->stencil_valuemask_back = -1;
+	context->stencil_func = GL_ALWAYS;
+	context->stencil_func_back = GL_ALWAYS;
+	context->stencil_sfail = GL_KEEP;
+	context->stencil_dpfail = GL_KEEP;
+	context->stencil_dppass = GL_KEEP;
+	context->stencil_sfail_back = GL_KEEP;
+	context->stencil_dpfail_back = GL_KEEP;
+	context->stencil_dppass_back = GL_KEEP;
+
 	context->logic_func = GL_COPY;
 	context->blend_sfactor = GL_ONE;
 	context->blend_dfactor = GL_ZERO;
@@ -8827,6 +9059,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	glTexture tmp_tex;
 	tmp_tex.mapped = GL_TRUE;
 	tmp_tex.deleted = GL_FALSE;
+	tmp_tex.format = GL_RGBA;
 	tmp_tex.type = GL_TEXTURE_UNBOUND;
 	tmp_tex.data = NULL;
 	tmp_tex.w = 0;
@@ -8905,7 +9138,7 @@ GLubyte* glGetString(GLenum name)
 {
 	static GLubyte vendor[] = "Robert Winkler";
 	static GLubyte renderer[] = "PortableGL";
-	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.7";
+	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.8";
 	static GLubyte shading_language[] = "C/C++";
 
 	switch (name) {
@@ -8926,7 +9159,6 @@ GLenum glGetError()
 	c->error = GL_NO_ERROR;
 	return err;
 }
-
 
 void glGenVertexArrays(GLsizei n, GLuint* arrays)
 {
@@ -9021,6 +9253,7 @@ void glGenTextures(GLsizei n, GLuint* textures)
 	tmp.data = NULL;
 	tmp.deleted = GL_FALSE;
 	tmp.mapped = GL_TRUE;
+	tmp.format = GL_RGBA;
 	tmp.type = GL_TEXTURE_UNBOUND;
 	tmp.w = 0;
 	tmp.h = 0;
@@ -9159,7 +9392,7 @@ void glBufferSubData(GLenum target, GLsizei offset, GLsizei size, const GLvoid* 
 
 void glBindTexture(GLenum target, GLuint texture)
 {
-	if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_CUBE_MAP) {
+	if (target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 		return;
@@ -9167,7 +9400,7 @@ void glBindTexture(GLenum target, GLuint texture)
 
 	target -= GL_TEXTURE_UNBOUND + 1;
 
-	if (texture < c->textures.size && c->textures.a[texture].deleted == GL_FALSE) {
+	if (texture < c->textures.size && !c->textures.a[texture].deleted) {
 		if (c->textures.a[texture].type == GL_TEXTURE_UNBOUND) {
 			c->bound_textures[target] = texture;
 			c->textures.a[texture].type = target;
@@ -9185,7 +9418,7 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
 {
 	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
 	//will add others as they're implemented
-	if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_CUBE_MAP) {
+	if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_RECTANGLE && target != GL_TEXTURE_CUBE_MAP) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 		return;
@@ -9356,6 +9589,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
 	//will add others as they're implemented
 	if (target != GL_TEXTURE_2D &&
+	    target != GL_TEXTURE_RECTANGLE &&
 	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
 	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
 	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
@@ -9375,7 +9609,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 
 	//ignore level for now
 
-	//TODO support other types
+	//TODO support other types?
 	if (type != GL_UNSIGNED_BYTE) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
@@ -9403,7 +9637,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	int padding_needed = byte_width % c->unpack_alignment;
 	int padded_row_len = (!padding_needed) ? byte_width : byte_width + c->unpack_alignment - padding_needed;
 
-	if (target == GL_TEXTURE_2D) {
+	if (target == GL_TEXTURE_2D || target == GL_TEXTURE_RECTANGLE) {
 		cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
 		c->textures.a[cur_tex].w = width;
@@ -9484,9 +9718,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 
 void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
-	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
-	//will add others as they're implemented
-	if (target != GL_TEXTURE_3D) {
+	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 		return;
@@ -9507,7 +9739,7 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	c->textures.a[cur_tex].d = depth;
 
 	if (type != GL_UNSIGNED_BYTE) {
-
+		// TODO
 		return;
 	}
 
@@ -9523,8 +9755,13 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		return;
 	}
 
-	if (c->textures.a[cur_tex].data)
+	int byte_width = width * components;
+	int padding_needed = byte_width % c->unpack_alignment;
+	int padded_row_len = (!padding_needed) ? byte_width : byte_width + c->unpack_alignment - padding_needed;
+
+	if (c->textures.a[cur_tex].data) {
 		free(c->textures.a[cur_tex].data);
+	}
 
 	//TODO support other internal formats? components should be of internalformat not format
 	if (!(c->textures.a[cur_tex].data = (u8*) malloc(width*height*depth * components))) {
@@ -9536,15 +9773,20 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 
 	u32* texdata = (u32*) c->textures.a[cur_tex].data;
 
-	if (data)
-		memcpy(texdata, data, width*height*depth*sizeof(u32));
+	if (data) {
+		if (!padding_needed) {
+			memcpy(texdata, data, width*height*depth*sizeof(u32));
+		} else {
+			for (int i=0; i<height*depth; ++i) {
+				memcpy(&texdata[i*byte_width], &((u8*)data)[i*padded_row_len], byte_width);
+			}
+		}
+	}
 
 	c->textures.a[cur_tex].mapped = GL_FALSE;
 
 	//TODO
 	//assume for now always RGBA coming in and that's what I'm storing it as
-
-
 }
 
 void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid* data)
@@ -9649,15 +9891,15 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 
 void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid* data)
 {
-	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
-	//will add others as they're implemented
-	if (target != GL_TEXTURE_3D) {
+	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 		return;
 	}
 
 	//ignore level for now
+	
+	// TODO handle UNPACK alignment here as well...
 
 	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
@@ -9721,6 +9963,7 @@ void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean norm
 
 	v->offset = offset;
 	v->normalized = normalized;
+	// I put ARRAY_BUFFER-itself instead of 0 to reinforce that bound_buffers is indexed that way, buffer type - GL_ARRAY_BUFFER
 	v->buf = c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER]; //can be 0 if offset is 0/NULL
 }
 
@@ -9951,9 +10194,7 @@ void glClearDepth(GLclampf depth)
 
 void glDepthFunc(GLenum func)
 {
-	if (func != GL_NEVER && func != GL_ALWAYS && func != GL_LESS &&
-	    func != GL_LEQUAL && func != GL_EQUAL && func != GL_GEQUAL &&
-	    func != GL_GREATER && func != GL_NOTEQUAL) {
+	if (func < GL_LESS || func > GL_NEVER) {
 		if (!c->error)
 			c->error =GL_INVALID_ENUM;
 
@@ -9969,6 +10210,11 @@ void glDepthRange(GLclampf nearVal, GLclampf farVal)
 	c->depth_range_far = clampf_01(farVal);
 }
 
+void glDepthMask(GLboolean flag)
+{
+	c->depth_mask = flag;
+}
+
 void glClear(GLbitfield mask)
 {
 	if (!(mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) {
@@ -9977,6 +10223,11 @@ void glClear(GLbitfield mask)
 		printf("failed to clear\n");
 		return;
 	}
+	
+	// TODO since all the buffers should be the same width and height
+	// (right? even though they're different types they should be 1 to 1),
+	// why not just set local w and h and use for all instead of member w/h
+	// for each framebuffer?
 
 	// better to just set min/max x/y and use nested loops even when scissor is disabled?
 	Color col = c->clear_color;
@@ -9996,7 +10247,6 @@ void glClear(GLbitfield mask)
 
 	if (mask & GL_DEPTH_BUFFER_BIT) {
 		if (!c->scissor_test) {
-			//TODO try a big memcpy or other way to clear it
 			for (int i=0; i < c->zbuf.w * c->zbuf.h; ++i) {
 				((float*)c->zbuf.buf)[i] = c->clear_depth;
 			}
@@ -10010,7 +10260,18 @@ void glClear(GLbitfield mask)
 	}
 
 	if (mask & GL_STENCIL_BUFFER_BIT) {
-		;
+		if (!c->scissor_test) {
+			//TODO try a big memcpy or other way to clear it
+			for (int i=0; i < c->stencil_buf.w * c->stencil_buf.h; ++i) {
+				c->stencil_buf.buf[i] = c->clear_stencil;
+			}
+		} else {
+			for (int y=c->scissor_ly; y<c->scissor_uy; ++y) {
+				for (int x=c->scissor_lx; x<c->scissor_ux; ++x) {
+					c->stencil_buf.lastrow[-y*c->stencil_buf.w + x] = c->clear_stencil;
+				}
+			}
+		}
 	}
 }
 
@@ -10041,6 +10302,9 @@ void glEnable(GLenum cap)
 		break;
 	case GL_SCISSOR_TEST:
 		c->scissor_test = GL_TRUE;
+		break;
+	case GL_STENCIL_TEST:
+		c->stencil_test = GL_TRUE;
 		break;
 	default:
 		if (!c->error)
@@ -10074,6 +10338,115 @@ void glDisable(GLenum cap)
 		break;
 	case GL_SCISSOR_TEST:
 		c->scissor_test = GL_FALSE;
+		break;
+	case GL_STENCIL_TEST:
+		c->stencil_test = GL_FALSE;
+		break;
+	default:
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+	}
+}
+
+GLboolean glIsEnabled(GLenum cap)
+{
+	// make up my own enum for this?  rename member as no_early_z?
+	//GLboolean fragdepth_or_discard;
+	switch (cap) {
+	case GL_DEPTH_TEST: return c->depth_test;
+	case GL_LINE_SMOOTH: return c->line_smooth;
+	case GL_CULL_FACE: return c->cull_face;
+	case GL_DEPTH_CLAMP: return c->depth_clamp;
+	case GL_BLEND: return c->blend;
+	case GL_COLOR_LOGIC_OP: return c->logic_ops;
+	case GL_POLYGON_OFFSET_FILL: return c->poly_offset;
+	case GL_SCISSOR_TEST: return c->scissor_test;
+	case GL_STENCIL_TEST: return c->stencil_test;
+	default:
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+	}
+
+	return GL_FALSE;
+}
+
+void glGetBooleanv(GLenum pname, GLboolean* params)
+{
+	// not sure it's worth adding every enum, spec says
+	// gelGet* will convert/map types if they don't match the function
+	switch (pname) {
+	case GL_DEPTH_TEST:          *params = c->depth_test;   break;
+	case GL_LINE_SMOOTH:         *params = c->line_smooth;  break;
+	case GL_CULL_FACE:           *params = c->cull_face;    break;
+	case GL_DEPTH_CLAMP:         *params = c->depth_clamp;  break;
+	case GL_BLEND:               *params = c->blend;        break;
+	case GL_COLOR_LOGIC_OP:      *params = c->logic_ops;    break;
+	case GL_POLYGON_OFFSET_FILL: *params = c->poly_offset;  break;
+	case GL_SCISSOR_TEST:        *params = c->scissor_test; break;
+	case GL_STENCIL_TEST:        *params = c->stencil_test; break;
+	default:
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+	}
+}
+
+void glGetFloatv(GLenum pname, GLfloat* params)
+{
+	switch (pname) {
+	case GL_POLYGON_OFFSET_FACTOR: *params = c->poly_factor; break;
+	case GL_POLYGON_OFFSET_UNITS:  *params = c->poly_units;  break;
+	case GL_POINT_SIZE:            *params = c->point_size;  break;
+	case GL_DEPTH_CLEAR_VALUE:     *params = c->clear_depth; break;
+	case GL_DEPTH_RANGE:
+		params[0] = c->depth_range_near;
+		params[1] = c->depth_range_near;
+		break;
+	default:
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+	}
+}
+
+void glGetIntegerv(GLenum pname, GLint* params)
+{
+	// TODO maybe make all the enum/int member names match the associated ENUM?
+	switch (pname) {
+	case GL_STENCIL_WRITE_MASK:       params[0] = c->stencil_writemask; break;
+	case GL_STENCIL_REF:              params[0] = c->stencil_ref; break;
+	case GL_STENCIL_VALUE_MASK:       params[0] = c->stencil_valuemask; break;
+	case GL_STENCIL_FUNC:             params[0] = c->stencil_func; break;
+	case GL_STENCIL_FAIL:             params[0] = c->stencil_sfail; break;
+	case GL_STENCIL_PASS_DEPTH_FAIL:  params[0] = c->stencil_dpfail; break;
+	case GL_STENCIL_PASS_DEPTH_PASS:  params[0] = c->stencil_dppass; break;
+
+	case GL_STENCIL_BACK_WRITE_MASK:       params[0] = c->stencil_writemask_back; break;
+	case GL_STENCIL_BACK_REF:              params[0] = c->stencil_ref_back; break;
+	case GL_STENCIL_BACK_VALUE_MASK:       params[0] = c->stencil_valuemask_back; break;
+	case GL_STENCIL_BACK_FUNC:             params[0] = c->stencil_func_back; break;
+	case GL_STENCIL_BACK_FAIL:             params[0] = c->stencil_sfail_back; break;
+	case GL_STENCIL_BACK_PASS_DEPTH_FAIL:  params[0] = c->stencil_dpfail_back; break;
+	case GL_STENCIL_BACK_PASS_DEPTH_PASS:  params[0] = c->stencil_dppass_back; break;
+
+
+	//TODO implement glBlendFuncSeparate and glBlendEquationSeparate
+	case GL_LOGIC_OP_MODE:             params[0] = c->logic_func; break;
+	case GL_BLEND_SRC_RGB:
+	case GL_BLEND_SRC_ALPHA:           params[0] = c->blend_sfactor; break;
+	case GL_BLEND_DST_RGB:
+	case GL_BLEND_DST_ALPHA:           params[0] = c->blend_dfactor; break;
+
+	case GL_BLEND_EQUATION_RGB:
+	case GL_BLEND_EQUATION_ALPHA:      params[0] = c->blend_equation; break;
+
+	case GL_CULL_FACE_MODE:            params[0] = c->cull_mode; break;
+	case GL_FRONT_FACE:                params[0] = c->front_face; break;
+	case GL_DEPTH_FUNC:                params[0] = c->depth_func; break;
+	case GL_POINT_SPRITE_COORD_ORIGIN: params[0] = c->point_spr_origin;
+	case GL_PROVOKING_VERTEX:          params[0] = c->provoking_vert; break;
+
+	case GL_POLYGON_MODE:
+		params[0] = c->poly_mode_front;
+		params[1] = c->poly_mode_back;
 		break;
 	default:
 		if (!c->error)
@@ -10189,7 +10562,7 @@ void glProvokingVertex(GLenum provokeMode)
 
 
 // Shader functions
-GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean use_frag_depth)
+GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard)
 {
 	if (!vertex_shader || !fragment_shader) {
 		//TODO set error? doesn't in spec but I'll think about it
@@ -10202,7 +10575,7 @@ GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsi
 		return 0;
 	}
 
-	glProgram tmp = {vertex_shader, fragment_shader, NULL, n, {0}, use_frag_depth, GL_FALSE };
+	glProgram tmp = {vertex_shader, fragment_shader, NULL, n, {0}, fragdepth_or_discard, GL_FALSE };
 	memcpy(tmp.interpolation, interpolation, n*sizeof(GLenum));
 
 	for (int i=1; i<c->programs.size; ++i) {
@@ -10241,7 +10614,7 @@ void glUseProgram(GLuint program)
 	c->vs_output.size = c->programs.a[program].vs_output_size;
 	cvec_reserve_float(&c->vs_output.output_buf, c->vs_output.size * MAX_VERTICES);
 	c->vs_output.interpolation = c->programs.a[program].interpolation;
-	c->frag_depth_used = c->programs.a[program].use_frag_depth;
+	c->fragdepth_or_discard = c->programs.a[program].fragdepth_or_discard;
 
 	c->cur_program = program;
 }
@@ -10305,7 +10678,7 @@ void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
 
 void glLogicOp(GLenum opcode)
 {
-	if (opcode < GL_CLEAR || opcode > GL_OR_INVERTED) {
+	if (opcode < GL_CLEAR || opcode > GL_INVERT) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 
@@ -10336,9 +10709,167 @@ void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 	c->scissor_uy = y+height;
 }
 
+void glStencilFunc(GLenum func, GLint ref, GLuint mask)
+{
+	if (func < GL_LESS || func > GL_NEVER) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	c->stencil_func = func;
+	c->stencil_func_back = func;
+
+	// TODO clamp byte function?
+	if (ref > 255)
+		ref = 255;
+	if (ref < 0)
+		ref = 0;
+
+	c->stencil_ref = ref;
+	c->stencil_ref_back = ref;
+
+	c->stencil_valuemask = mask;
+	c->stencil_valuemask_back = mask;
+}
+
+void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
+{
+	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	if (face == GL_FRONT_AND_BACK) {
+		glStencilFunc(func, ref, mask);
+		return;
+	}
+
+	if (func < GL_LESS || func > GL_NEVER) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	// TODO clamp byte function?
+	if (ref > 255)
+		ref = 255;
+	if (ref < 0)
+		ref = 0;
+
+	if (face == GL_FRONT) {
+		c->stencil_func = func;
+		c->stencil_ref = ref;
+		c->stencil_valuemask = mask;
+	} else {
+		c->stencil_func_back = func;
+		c->stencil_ref_back = ref;
+		c->stencil_valuemask_back = mask;
+	}
+}
+
+void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass)
+{
+	// TODO not sure if I should check all parameters first or
+	// allow partial success?
+	//
+	// Also, how best to check when the enums aren't contiguous?  empty switch?
+	// manually checking all enums?
+	if ((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO ||
+	    (dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && sfail != GL_ZERO ||
+	    (dppass < GL_INVERT || dppass > GL_DECR_WRAP) && sfail != GL_ZERO) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	c->stencil_sfail = sfail;
+	c->stencil_dpfail = dpfail;
+	c->stencil_dppass = dppass;
+
+	c->stencil_sfail_back = sfail;
+	c->stencil_dpfail_back = dpfail;
+	c->stencil_dppass_back = dppass;
+}
+
+void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass)
+{
+	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	if (face == GL_FRONT_AND_BACK) {
+		glStencilOp(sfail, dpfail, dppass);
+		return;
+	}
+
+	if ((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO ||
+	    (dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && sfail != GL_ZERO ||
+	    (dppass < GL_INVERT || dppass > GL_DECR_WRAP) && sfail != GL_ZERO) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	if (face == GL_FRONT) {
+		c->stencil_sfail = sfail;
+		c->stencil_dpfail = dpfail;
+		c->stencil_dppass = dppass;
+	} else {
+		c->stencil_sfail_back = sfail;
+		c->stencil_dpfail_back = dpfail;
+		c->stencil_dppass_back = dppass;
+	}
+}
+
+void glClearStencil(GLint s)
+{
+	// stencil is 8 bit bytes so just hardcoding FF here
+	c->clear_stencil = s & 0xFF;
+}
+
+void glStencilMask(GLuint mask)
+{
+	c->stencil_writemask = mask;
+	c->stencil_writemask_back = mask;
+}
+
+void glStencilMaskSeparate(GLenum face, GLuint mask)
+{
+	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+
+		return;
+	}
+
+	if (face == GL_FRONT_AND_BACK) {
+		glStencilMask(mask);
+		return;
+	}
+
+	if (face == GL_FRONT) {
+		c->stencil_writemask = mask;
+	} else {
+		c->stencil_writemask_back = mask;
+	}
+}
 
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
+
+void glGetDoublev(GLenum pname, GLdouble* params) { }
+void glGetInteger64v(GLenum pname, GLint64* params) { }
+
 
 void glGetProgramiv(GLuint program, GLenum pname, GLint* params) { }
 void glGetProgramInfoLog(GLuint program, GLsizei maxLength, GLsizei* length, GLchar* infoLog) { }
@@ -10530,11 +11061,11 @@ vec4 texture2D(GLuint tex, float x, float y)
 	glTexture* t = &c->textures.a[tex];
 	Color* texdata = (Color*)t->data;
 
-	double dw = t->w - EPSILON;
-	double dh = t->h - EPSILON;
-
 	int w = t->w;
 	int h = t->h;
+
+	double dw = w - EPSILON;
+	double dh = h - EPSILON;
 
 	double xw = x * dw;
 	double yh = y * dh;
@@ -10670,6 +11201,132 @@ vec4 texture3D(GLuint tex, float x, float y, float z)
 		cijk = add_vec4s(cijk, ci1j1k1);
 
 		return cijk;
+	}
+}
+
+// for now this should work
+vec4 texture2DArray(GLuint tex, float x, float y, int z)
+{
+	int i0, j0, i1, j1;
+
+	glTexture* t = &c->textures.a[tex];
+	Color* texdata = (Color*)t->data;
+	int w = t->w;
+	int h = t->h;
+
+	double dw = w - EPSILON;
+	double dh = h - EPSILON;
+
+	int plane = w * h;
+	double xw = x * dw;
+	double yh = y * dh;
+
+
+	if (t->mag_filter == GL_NEAREST) {
+		i0 = wrap(floor(xw), w, t->wrap_s);
+		j0 = wrap(floor(yh), h, t->wrap_t);
+
+		return Color_to_vec4(texdata[z*plane + j0*w + i0]);
+
+	} else {
+		// LINEAR
+		// This seems right to me since pixel centers are 0.5 but
+		// this isn't exactly what's described in the spec or FoCG
+		i0 = wrap(floor(xw - 0.5), w, t->wrap_s);
+		j0 = wrap(floor(yh - 0.5), h, t->wrap_t);
+		i1 = wrap(floor(xw + 0.499999), w, t->wrap_s);
+		j1 = wrap(floor(yh + 0.499999), h, t->wrap_t);
+
+		double tmp2;
+		double alpha = modf(xw+0.5, &tmp2);
+		double beta = modf(yh+0.5, &tmp2);
+		if (alpha < 0) ++alpha;
+		if (beta < 0) ++beta;
+
+		//hermite smoothing is optional
+		//looks like my nvidia implementation doesn't do it
+		//but it can look a little better
+#ifdef HERMITE_SMOOTHING
+		alpha = alpha*alpha * (3 - 2*alpha);
+		beta = beta*beta * (3 - 2*beta);
+#endif
+		vec4 cij = Color_to_vec4(texdata[z*plane + j0*w + i0]);
+		vec4 ci1j = Color_to_vec4(texdata[z*plane + j0*w + i1]);
+		vec4 cij1 = Color_to_vec4(texdata[z*plane + j1*w + i0]);
+		vec4 ci1j1 = Color_to_vec4(texdata[z*plane + j1*w + i1]);
+
+		cij = scale_vec4(cij, (1-alpha)*(1-beta));
+		ci1j = scale_vec4(ci1j, alpha*(1-beta));
+		cij1 = scale_vec4(cij1, (1-alpha)*beta);
+		ci1j1 = scale_vec4(ci1j1, alpha*beta);
+
+		cij = add_vec4s(cij, ci1j);
+		cij = add_vec4s(cij, cij1);
+		cij = add_vec4s(cij, ci1j1);
+
+		return cij;
+	}
+}
+
+vec4 texture_rect(GLuint tex, float x, float y)
+{
+	int i0, j0, i1, j1;
+
+	glTexture* t = &c->textures.a[tex];
+	Color* texdata = (Color*)t->data;
+
+	int w = t->w;
+	int h = t->h;
+
+	double xw = x;
+	double yh = y;
+
+	//TODO don't just use mag_filter all the time?
+	//is it worth bothering?
+	if (t->mag_filter == GL_NEAREST) {
+		i0 = wrap(floor(xw), w, t->wrap_s);
+		j0 = wrap(floor(yh), h, t->wrap_t);
+
+		return Color_to_vec4(texdata[j0*w + i0]);
+
+	} else {
+		// LINEAR
+		// This seems right to me since pixel centers are 0.5 but
+		// this isn't exactly what's described in the spec or FoCG
+		i0 = wrap(floor(xw - 0.5), w, t->wrap_s);
+		j0 = wrap(floor(yh - 0.5), h, t->wrap_t);
+		i1 = wrap(floor(xw + 0.499999), w, t->wrap_s);
+		j1 = wrap(floor(yh + 0.499999), h, t->wrap_t);
+
+		double tmp2;
+		double alpha = modf(xw+0.5, &tmp2);
+		double beta = modf(yh+0.5, &tmp2);
+		if (alpha < 0) ++alpha;
+		if (beta < 0) ++beta;
+
+		//hermite smoothing is optional
+		//looks like my nvidia implementation doesn't do it
+		//but it can look a little better
+#ifdef HERMITE_SMOOTHING
+		alpha = alpha*alpha * (3 - 2*alpha);
+		beta = beta*beta * (3 - 2*beta);
+#endif
+
+		vec4 cij = Color_to_vec4(texdata[j0*w + i0]);
+		vec4 ci1j = Color_to_vec4(texdata[j0*w + i1]);
+		vec4 cij1 = Color_to_vec4(texdata[j1*w + i0]);
+		vec4 ci1j1 = Color_to_vec4(texdata[j1*w + i1]);
+
+		cij = scale_vec4(cij, (1-alpha)*(1-beta));
+		ci1j = scale_vec4(ci1j, alpha*(1-beta));
+		cij1 = scale_vec4(cij1, (1-alpha)*beta);
+		ci1j1 = scale_vec4(ci1j1, alpha*beta);
+
+		cij = add_vec4s(cij, ci1j);
+		cij = add_vec4s(cij, cij1);
+		cij = add_vec4s(cij, ci1j1);
+
+		return cij;
 	}
 }
 
