@@ -256,7 +256,7 @@ void get_motion_vector(int flying, int sz, int sx, float rx, float ry,
 GLuint gen_crosshair_buffer() {
     int x = g->width / 2;
     int y = g->height / 2;
-    int p = 10 * g->scale;
+    int p = 2 * g->scale;
     float data[] = {
         x, y - p, x, y + p,
         x - p, y, x + p, y
@@ -2516,13 +2516,13 @@ int handle_events(double dt)
 				// This is roughly what would be needed, and it's what I have
 				// in a couple PortableGL demos but clearly I'm missing something,
 				// some extra state/dependency, since it doesn't work here
-				g->width = e.window.data1;
-				g->height = e.window.data2;
-				resize_framebuffer(g->width, g->height);
+				//g->width = e.window.data1;
+				//g->height = e.window.data2;
+				//resize_framebuffer(g->width, g->height);
 				//g->scale = get_scale_factor();
 				//glViewport(0, 0, g->width, g->height);
-				SDL_DestroyTexture(g->tex);
-				g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g->width, g->height);
+				//SDL_DestroyTexture(g->tex);
+				//g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, g->width, g->height);
 
 				break;
 			}
@@ -2801,10 +2801,10 @@ void create_window() {
 
 	g->ren = NULL;
 	g->tex = NULL;
-	g->width = WINDOW_WIDTH;
-	g->height = WINDOW_HEIGHT;
+	g->width = X_RES;
+	g->height = Y_RES;
 	
-	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
+	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
 	if (!g->window) {
 		printf("Failed to create window: %s\n", SDL_GetError());
 		SDL_Quit();
@@ -2812,11 +2812,11 @@ void create_window() {
 	}
 
 	g->ren = SDL_CreateRenderer(g->window, -1, SDL_RENDERER_SOFTWARE);
-	g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WINDOW_WIDTH, WINDOW_HEIGHT);
+	g->tex = SDL_CreateTexture(g->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, X_RES, Y_RES);
 
 	g->bbufpix = NULL; // should already be NULL since global/static but meh
 
-	if (!init_glContext(&g->context, &g->bbufpix, WINDOW_WIDTH, WINDOW_HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
+	if (!init_glContext(&g->context, &g->bbufpix, X_RES, Y_RES, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
 		puts("Failed to initialize glContext");
 		cleanup();
 		exit(0);
@@ -3235,8 +3235,8 @@ int main(int argc, char **argv) {
         while (1) {
             // WINDOW SIZE AND SCALE //
             // TODO move to handle_events, only recalc on resize
-			g->scale = get_scale_factor();
-			glViewport(0, 0, g->width, g->height);
+			//g->scale = get_scale_factor();
+			//glViewport(0, 0, g->width, g->height);
 
             // FRAME RATE //
             if (g->time_changed) {
@@ -3326,6 +3326,9 @@ int main(int argc, char **argv) {
                 render_text(&text_attrib, ALIGN_LEFT, tx, ty, ts, text_buffer);
                 ty -= ts * 2;
             }
+            if (!(rand() % 100)) {
+            	printf("%d FPS\n", fps.fps);
+            }
             if (SHOW_CHAT_TEXT) {
                 for (int i = 0; i < MAX_MESSAGES; i++) {
                     int index = (g->message_index + i) % MAX_MESSAGES;
@@ -3393,7 +3396,7 @@ int main(int argc, char **argv) {
 
             // SWAP AND POLL //
             //SDL_GL_SwapWindow(g->window);
-            SDL_UpdateTexture(g->tex, NULL, g->bbufpix, g->width * sizeof(u32));
+            SDL_UpdateTexture(g->tex, NULL, g->bbufpix, X_RES * sizeof(u32));
             //Render the scene
             SDL_RenderCopy(g->ren, g->tex, NULL, NULL);
             SDL_RenderPresent(g->ren);
