@@ -2518,7 +2518,7 @@ int handle_events(double dt)
 				// some extra state/dependency, since it doesn't work here
 				g->width = e.window.data1;
 				g->height = e.window.data2;
-				resize_framebuffer(g->width, g->height);
+				pglResizeFramebuffer(g->width, g->height);
 				//g->scale = get_scale_factor();
 				//glViewport(0, 0, g->width, g->height);
 				SDL_DestroyTexture(g->tex);
@@ -3114,7 +3114,7 @@ int main(int argc, char **argv) {
 
     program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
     glUseProgram(program);
-    set_uniform(&g->uniforms);
+    pglSetUniform(&g->uniforms);
     block_attrib.program = program;
     block_attrib.sampler = block_tex;
     block_attrib.extra1 = sky_tex;
@@ -3124,13 +3124,13 @@ int main(int argc, char **argv) {
 
     program = pglCreateProgram(line_vs, line_fs, 0, interpolation, GL_FALSE);
     glUseProgram(program);
-    set_uniform(&g->uniforms);
+    pglSetUniform(&g->uniforms);
     line_attrib.program = program;
     line_attrib.position = 0;
 
     program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_FALSE);
     glUseProgram(program);
-    set_uniform(&g->uniforms);
+    pglSetUniform(&g->uniforms);
     text_attrib.program = program;
     text_attrib.sampler = font_tex;
     text_attrib.position = 0;
@@ -3138,7 +3138,7 @@ int main(int argc, char **argv) {
 
     program = pglCreateProgram(sky_vs, sky_fs, 2, interpolation, GL_FALSE);
     glUseProgram(program);
-    set_uniform(&g->uniforms);
+    pglSetUniform(&g->uniforms);
     sky_attrib.program = program;
     sky_attrib.sampler = sky_tex;
     sky_attrib.position = 0;

@@ -1,6 +1,6 @@
 /*
 
-PortableGL 0.7 MIT licensed software renderer that closely mirrors OpenGL 3.3
+PortableGL 0.91 MIT licensed software renderer that closely mirrors OpenGL 3.x
 portablegl.com
 robertwinkler.com
 
@@ -44,13 +44,16 @@ QUICK NOTES:
     Only GL_TEXTURE_MAG_FILTER is actually used internally but you can set the
     MIN_FILTER for a texture.
 
-    8-bit per channel RGBA is the only supported format format for the framebuffer
+    8-bit per channel RGBA is the only supported format for the framebuffer
     You can specify the order using the masks in init_glContext. Technically it'd be relatively
     trivial to add support for other formats but for now we use a u32* to access the buffer.
 
 Any PortableGL program has roughly this structure, with some things
 possibly declared globally or passed around in function parameters
 as needed:
+
+    #define WIDTH 640
+    #define HEIGHT 480
 
     // shaders are functions matching thise prototypes
     void smooth_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
@@ -64,7 +67,7 @@ as needed:
     u32* backbuf;
     glContext the_context;
 
-    if (!init_glContext(&the_context, &bbufpix, WIDTH, HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
+    if (!init_glContext(&the_context, &backbuf, WIDTH, HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
         puts("Failed to initialize glContext");
         exit(0);
     }
@@ -84,7 +87,7 @@ as needed:
     glUseProgram(myshader);
 
     My_Uniform the_uniforms;
-    set_uniform(&the_uniforms);
+    pglSetUniform(&the_uniforms);
 
     the_uniforms.v_color = Red; // not actually used, using per vert color
     memcpy(the_uniforms.mvp_mat, identity, sizeof(mat4));
@@ -140,14 +143,12 @@ as needed:
     }
 
 That's basically it.  There are some other non-standard features like
-set_vs_interpolation that lets you change the interpolation of a shader
+pglSetInterp that lets you change the interpolation of a shader
 whenever you want.  In real OpenGL you'd have to have 2 (or more) separate
-but almost identical shaders to do that.  I'm open to a better name
-for that function but I'm leaning toward just set_interpolation since
-the vertex shader is the only place you actually specify it.
+but almost identical shaders to do that.
 
-There also these predefined maximums which considering the performance
-limitations of PortableGL are probably more than enough.  MAX_DRAW_BUFFERS
+There are also these predefined maximums which, considering the performance
+limitations of PortableGL, are probably more than enough.  MAX_DRAW_BUFFERS
 isn't used since they're not currently supported anyway.
 
     #define MAX_VERTICES 500000
@@ -156,8 +157,8 @@ isn't used since they're not currently supported anyway.
     #define GL_MAX_DRAW_BUFFERS 8
 
 
-LICENSE
-Copyright (c) 2011-2020 Robert Winkler
+MIT License
+Copyright (c) 2011-2021 Robert Winkler
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -1878,6 +1879,11 @@ enum
 	GL_DYNAMIC_READ,
 	GL_DYNAMIC_COPY,
 
+	// mapped buffer access
+	GL_READ_ONLY,
+	GL_WRITE_ONLY,
+	GL_READ_WRITE,
+
 	//polygon modes
 	GL_POINT,
 	GL_LINE,
@@ -1891,6 +1897,8 @@ enum
 	GL_TRIANGLES,
 	GL_TRIANGLE_STRIP,
 	GL_TRIANGLE_FAN,
+
+	// unsupported primitives because I don't support the geometry shader
 	GL_LINE_STRIP_AJACENCY,
 	GL_LINES_AJACENCY,
 	GL_TRIANGLES_AJACENCY,
@@ -2223,7 +2231,11 @@ typedef struct glBuffer
 	u8* data;
 
 	GLboolean deleted;
-	GLboolean mapped;
+
+	// true if the user uses one of the pgl data extension functions that
+	// doesn't copy the data.
+	// If true, PGL does not free it when deleting the buffer
+	GLboolean user_owned;
 } glBuffer;
 
 typedef struct glVertex_Attrib
@@ -2276,7 +2288,9 @@ typedef struct glTexture
 	GLenum type; // GL_TEXTURE_UNBOUND, GL_TEXTURE_2D etc.
 
 	GLboolean deleted;
-	GLboolean mapped;
+
+	// TODO same meaning as in glBuffer
+	GLboolean user_owned;
 
 	u8* data;
 } glTexture;
@@ -4192,6 +4206,7 @@ typedef struct glContext
 	glFramebuffer back_buffer;
 	glFramebuffer stencil_buf;
 
+	int user_alloced_backbuf;
 	int bitdepth;
 	u32 Rmask;
 	u32 Gmask;
@@ -4235,7 +4250,8 @@ vec4 texture_cubemap(GLuint texture, float x, float y, float z);
 int init_glContext(glContext* c, u32** back_buffer, int w, int h, int bitdepth, u32 Rmask, u32 Gmask, u32 Bmask, u32 Amask);
 void free_glContext(glContext* context);
 void set_glContext(glContext* context);
-void resize_framebuffer(size_t w, size_t h);
+
+void pglResizeFramebuffer(size_t w, size_t h);
 
 void glViewport(int x, int y, GLsizei width, GLsizei height);
 
@@ -4280,6 +4296,7 @@ void glStencilMaskSeparate(GLenum face, GLuint mask);
 
 //textures
 void glGenTextures(GLsizei n, GLuint* textures);
+void glDeleteTextures(GLsizei n, GLuint* textures);
 void glBindTexture(GLenum target, GLuint texture);
 
 void glActiveTexture(GLenum texture);
@@ -4320,11 +4337,7 @@ GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsi
 void glDeleteProgram(GLuint program);
 void glUseProgram(GLuint program);
 
-void set_uniform(void* uniform);
-
-//This isn't possible in regular OpenGL, changing the interpolation of vs output of
-//an existing shader.  You'd have to switch between 2 almost identical shaders.
-void set_vs_interpolation(GLsizei n, GLenum* interpolation);
+void pglSetUniform(void* uniform);
 
 
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
@@ -4349,6 +4362,12 @@ void glDeleteShader(GLuint shader);
 void glDetachShader(GLuint program, GLuint shader);
 
 GLint glGetUniformLocation(GLuint program, const GLchar* name);
+GLint glGetAttribLocation(GLuint program, const GLchar* name);
+
+void* glMapBuffer(GLenum target, GLenum access);
+void* glMapNamedBuffer(GLuint buffer, GLenum access);
+GLboolean glUnmapBuffer(GLenum target);
+GLboolean glUnmapNamedBuffer(GLuint buffer);
 
 void glUniform1f(GLint location, GLfloat v0);
 void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
@@ -4393,12 +4412,30 @@ void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, co
 
 
 
-void clear_screen();
+void pglClearScreen();
+
+//This isn't possible in regular OpenGL, changing the interpolation of vs output of
+//an existing shader.  You'd have to switch between 2 almost identical shaders.
+void pglSetInterp(GLsizei n, GLenum* interpolation);
+
 
 //TODO
 //pglDrawRect(x, y, w, h)
 //pglDrawPoint(x, y)
 void pglDrawFrame();
+
+// TODO should these be called pglMapped* since that's what they do?  I don't think so, since it's too different from actual spec for mapped buffers
+void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
+void pglTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
+
+void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
+
+void pglTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data);
+
+// I could make these return the data?
+void pglGetBufferData(GLuint buffer, GLvoid** data);
+void pglGetTextureData(GLuint texture, GLvoid** data);
+
 
 void put_pixel(Color color, int x, int y);
 
@@ -7451,8 +7488,20 @@ static void draw_point(glVertex* vert)
 	float p_size = c->point_size;
 	float origin = (c->point_spr_origin == GL_UPPER_LEFT) ? -1.0f : 1.0f;
 
+	// Can easily clip whole point when point size <= 1 ...
+	if (p_size <= 1) {
+		if (x < 0 || y < 0 || x >= c->back_buffer.w || y >= c->back_buffer.h)
+			return;
+	}
+
 	for (float i = y-p_size/2; i<y+p_size/2; ++i) {
+		if (i < 0 || i >= c->back_buffer.h)
+			continue;
+
 		for (float j = x-p_size/2; j<x+p_size/2; ++j) {
+
+			if (j < 0 || j >= c->back_buffer.w)
+				continue;
 			
 			// per page 110 of 3.3 spec
 			c->builtins.gl_PointCoord.x = 0.5f + ((int)j + 0.5f - point.x)/p_size;
@@ -8457,12 +8506,12 @@ static void draw_triangle_fill(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 			alpha = 1 - beta - gamma;
 
 			if (alpha >= 0 && beta >= 0 && gamma >= 0) {
-				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
-				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share
-				//edges
-				if ((alpha > 0 || line_func(&l12, hp0.x, hp0.y) * line_func(&l12, -1, -1) > 0) &&
-				    (beta  > 0 || line_func(&l20, hp1.x, hp1.y) * line_func(&l20, -1, -1) > 0) &&
-				    (gamma > 0 || line_func(&l01, hp2.x, hp2.y) * line_func(&l01, -1, -1) > 0)) {
+				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -2.5
+				//this is a deterministic way of choosing which triangle gets a pixel for triangles that share
+				//edges (see commit message for e87e324)
+				if ((alpha > 0 || line_func(&l12, hp0.x, hp0.y) * line_func(&l12, -1, -2.5) > 0) &&
+				    (beta  > 0 || line_func(&l20, hp1.x, hp1.y) * line_func(&l20, -1, -2.5) > 0) &&
+				    (gamma > 0 || line_func(&l01, hp2.x, hp2.y) * line_func(&l01, -1, -2.5) > 0)) {
 					//calculate interoplation here
 					tmp2 = alpha*inv_w0 + beta*inv_w1 + gamma*inv_w2;
 
@@ -8901,7 +8950,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	if (bitdepth > 32 || !back)
 		return 0;
 
-	void* user_alloced = *back;
+	context->user_alloced_backbuf = *back != NULL;
 	if (!*back) {
 		int bytes_per_pixel = (bitdepth + CHAR_BIT-1) / CHAR_BIT;
 		*back = (u32*) malloc(w * h * bytes_per_pixel);
@@ -8911,7 +8960,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 
 	context->zbuf.buf = (u8*) malloc(w*h * sizeof(float));
 	if (!context->zbuf.buf) {
-		if (!user_alloced) {
+		if (!context->user_alloced_backbuf) {
 			free(*back);
 			*back = NULL;
 		}
@@ -8920,7 +8969,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 
 	context->stencil_buf.buf = (u8*) malloc(w*h);
 	if (!context->stencil_buf.buf) {
-		if (!user_alloced) {
+		if (!context->user_alloced_backbuf) {
 			free(*back);
 			*back = NULL;
 		}
@@ -8994,6 +9043,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 
 	context->stencil_test = GL_FALSE;
 	context->stencil_writemask = -1; // all 1s for the masks
+	context->stencil_writemask_back = -1;
 	context->stencil_ref = 0;
 	context->stencil_ref_back = 0;
 	context->stencil_valuemask = -1;
@@ -9053,11 +9103,11 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	//need to push back once since 0 is invalid
 	//valid buffers have to start at position 1
 	glBuffer tmp_buf;
-	tmp_buf.mapped = GL_TRUE;
+	tmp_buf.user_owned = GL_TRUE;
 	tmp_buf.deleted = GL_FALSE;
 
 	glTexture tmp_tex;
-	tmp_tex.mapped = GL_TRUE;
+	tmp_tex.user_owned = GL_TRUE;
 	tmp_tex.deleted = GL_FALSE;
 	tmp_tex.format = GL_RGBA;
 	tmp_tex.type = GL_TEXTURE_UNBOUND;
@@ -9076,16 +9126,21 @@ void free_glContext(glContext* context)
 	int i;
 
 	free(context->zbuf.buf);
+	free(context->stencil_buf.buf);
+	if (!context->user_alloced_backbuf) {
+		free(context->back_buffer.buf);
+	}
+
 
 	for (i=0; i<context->buffers.size; ++i) {
-		if (!context->buffers.a[i].mapped) {
+		if (!context->buffers.a[i].user_owned) {
 			printf("freeing buffer %d\n", i);
 			free(context->buffers.a[i].data);
 		}
 	}
 
 	for (i=0; i<context->textures.size; ++i) {
-		if (!context->textures.a[i].mapped) {
+		if (!context->textures.a[i].user_owned) {
 			printf("freeing texture %d\n", i);
 			free(context->textures.a[i].data);
 		}
@@ -9106,7 +9161,7 @@ void set_glContext(glContext* context)
 	c = context;
 }
 
-void resize_framebuffer(size_t w, size_t h)
+void pglResizeFramebuffer(size_t w, size_t h)
 {
 	u8* tmp;
 	tmp = (u8*) realloc(c->zbuf.buf, w*h * sizeof(float));
@@ -9138,7 +9193,7 @@ GLubyte* glGetString(GLenum name)
 {
 	static GLubyte vendor[] = "Robert Winkler";
 	static GLubyte renderer[] = "PortableGL";
-	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.8";
+	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.91";
 	static GLubyte shading_language[] = "C/C++";
 
 	switch (name) {
@@ -9201,7 +9256,7 @@ void glDeleteVertexArrays(GLsizei n, const GLuint* arrays)
 void glGenBuffers(GLsizei n, GLuint* buffers)
 {
 	glBuffer tmp;
-	tmp.mapped = GL_TRUE;  //TODO not really but I use this to know whether to free or not
+	tmp.user_owned = GL_TRUE;  // NOTE: Doesn't really matter at this point
 	tmp.data = NULL;
 	tmp.deleted = GL_FALSE;
 
@@ -9233,7 +9288,7 @@ void glDeleteBuffers(GLsizei n, const GLuint* buffers)
 		if (buffers[i] == c->bound_buffers[type])
 			c->bound_buffers[type] = 0;
 
-		if (!c->buffers.a[buffers[i]].mapped) {
+		if (!c->buffers.a[buffers[i]].user_owned) {
 			free(c->buffers.a[buffers[i]].data);
 			c->buffers.a[buffers[i]].data = NULL;
 		}
@@ -9252,7 +9307,7 @@ void glGenTextures(GLsizei n, GLuint* textures)
 	tmp.wrap_t = GL_REPEAT;
 	tmp.data = NULL;
 	tmp.deleted = GL_FALSE;
-	tmp.mapped = GL_TRUE;
+	tmp.user_owned = GL_TRUE;  // NOTE: could be either before data
 	tmp.format = GL_RGBA;
 	tmp.type = GL_TEXTURE_UNBOUND;
 	tmp.w = 0;
@@ -9285,7 +9340,7 @@ void glDeleteTextures(GLsizei n, GLuint* textures)
 		if (textures[i] == c->bound_textures[type])
 			c->bound_textures[type] = 0;
 
-		if (!c->textures.a[textures[i]].mapped) {
+		if (!c->textures.a[textures[i]].user_owned) {
 			free(c->textures.a[textures[i]].data);
 			c->textures.a[textures[i]].data = NULL;
 		}
@@ -9358,7 +9413,7 @@ void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
 		memcpy(c->buffers.a[c->bound_buffers[target]].data, data, size);
 	}
 
-	c->buffers.a[c->bound_buffers[target]].mapped = GL_FALSE;
+	c->buffers.a[c->bound_buffers[target]].user_owned = GL_FALSE;
 	c->buffers.a[c->bound_buffers[target]].size = size;
 
 	if (target == GL_ELEMENT_ARRAY_BUFFER) {
@@ -9562,8 +9617,8 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		return;
 	}
 
-	if (c->textures.a[cur_tex].data)
-		free(c->textures.a[cur_tex].data);
+	// NULL or valid
+	free(c->textures.a[cur_tex].data);
 
 	//TODO support other internal formats? components should be of internalformat not format
 	if (!(c->textures.a[cur_tex].data = (u8*) malloc(width * components))) {
@@ -9578,7 +9633,7 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	if (data)
 		memcpy(&texdata[0], data, width*sizeof(u32));
 
-	c->textures.a[cur_tex].mapped = GL_FALSE;
+	c->textures.a[cur_tex].user_owned = GL_FALSE;
 
 	//TODO
 	//assume for now always RGBA coming in and that's what I'm storing it as
@@ -9664,10 +9719,15 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 			}
 		}
 
-		c->textures.a[cur_tex].mapped = GL_FALSE;
+		c->textures.a[cur_tex].user_owned = GL_FALSE;
 
 	} else {  //CUBE_MAP
 		cur_tex = c->bound_textures[GL_TEXTURE_CUBE_MAP-GL_TEXTURE_UNBOUND-1];
+
+		// If we're reusing a texture, and we haven't already loaded
+		// one of the planes of the cubemap, data is either NULL or valid
+		if (!c->textures.a[cur_tex].w)
+			free(c->textures.a[cur_tex].data);
 
 		if (width != height) {
 			//TODO spec says INVALID_VALUE, man pages say INVALID_ENUM ?
@@ -9711,7 +9771,7 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 			}
 		}
 
-		c->textures.a[cur_tex].mapped = GL_FALSE;
+		c->textures.a[cur_tex].user_owned = GL_FALSE;
 
 	} //end CUBE_MAP
 }
@@ -9759,9 +9819,8 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	int padding_needed = byte_width % c->unpack_alignment;
 	int padded_row_len = (!padding_needed) ? byte_width : byte_width + c->unpack_alignment - padding_needed;
 
-	if (c->textures.a[cur_tex].data) {
-		free(c->textures.a[cur_tex].data);
-	}
+	// NULL or valid
+	free(c->textures.a[cur_tex].data);
 
 	//TODO support other internal formats? components should be of internalformat not format
 	if (!(c->textures.a[cur_tex].data = (u8*) malloc(width*height*depth * components))) {
@@ -9783,7 +9842,7 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		}
 	}
 
-	c->textures.a[cur_tex].mapped = GL_FALSE;
+	c->textures.a[cur_tex].user_owned = GL_FALSE;
 
 	//TODO
 	//assume for now always RGBA coming in and that's what I'm storing it as
@@ -10058,9 +10117,6 @@ void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei inst
 		return;
 	}
 
-	//TODO check for buffer mapped when I implement that according to spec
-	//still want to do my own special map function to mean just use the pointer
-	
 	if (count < 0 || instancecount < 0) {
 		if (!c->error)
 			c->error = GL_INVALID_VALUE;
@@ -10082,8 +10138,6 @@ void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, 
 		return;
 	}
 
-	//TODO check for buffer mapped when I implement that according to spec
-	//still want to do my own special map function to mean just use the pointer
 	if (count < 0 || instancecount < 0) {
 		if (!c->error)
 			c->error = GL_INVALID_VALUE;
@@ -10106,14 +10160,12 @@ void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, GLsizei of
 		return;
 	}
 
-	//error not in the spec but says type must be one of these ... strange
+	// NOTE: error not in the spec but says type must be one of these ... strange
 	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
 		return;
 	}
-	//TODO check for buffer mapped when I implement that according to spec
-	//still want to do my own special map function to mean just use the pointer
 	if (count < 0 || instancecount < 0) {
 		if (!c->error)
 			c->error = GL_INVALID_VALUE;
@@ -10143,8 +10195,6 @@ void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type
 			c->error = GL_INVALID_ENUM;
 		return;
 	}
-	//TODO check for buffer mapped when I implement that according to spec
-	//still want to do my own special map function to mean just use the pointer
 	if (count < 0 || instancecount < 0) {
 		if (!c->error)
 			c->error = GL_INVALID_VALUE;
@@ -10247,6 +10297,7 @@ void glClear(GLbitfield mask)
 
 	if (mask & GL_DEPTH_BUFFER_BIT) {
 		if (!c->scissor_test) {
+			//TODO try a big memcpy or other way to clear it
 			for (int i=0; i < c->zbuf.w * c->zbuf.h; ++i) {
 				((float*)c->zbuf.buf)[i] = c->clear_depth;
 			}
@@ -10619,30 +10670,11 @@ void glUseProgram(GLuint program)
 	c->cur_program = program;
 }
 
-void set_uniform(void* uniform)
+void pglSetUniform(void* uniform)
 {
 	//TODO check for NULL? definitely if I ever switch to storing a local
 	//copy in glProgram
 	c->programs.a[c->cur_program].uniform = uniform;
-}
-
-
-//TODO rename?  interpolation only applies to vs output, ie it's done
-//between the vs and fs.  So maybe call it vs_output_interp so
-//it's not confused with the input vertex attributes
-void set_vs_interpolation(GLsizei n, GLenum* interpolation)
-{
-	c->programs.a[c->cur_program].vs_output_size = n;
-	c->vs_output.size = n;
-
-	memcpy(c->programs.a[c->cur_program].interpolation, interpolation, n*sizeof(GLenum));
-	cvec_reserve_float(&c->vs_output.output_buf, n * MAX_VERTICES);
-
-	//vs_output.interpolation would be already pointing at current program's array
-	//unless the programs array was realloced since the last glUseProgram because
-	//they've created a bunch of programs.  Unlikely they'd be changing a shader
-	//before creating all their shaders but whatever.
-	c->vs_output.interpolation = c->programs.a[c->cur_program].interpolation;
 }
 
 
@@ -10864,6 +10896,44 @@ void glStencilMaskSeparate(GLenum face, GLuint mask)
 	}
 }
 
+
+// Just wrap my pgl extension getter, unmap does nothing
+void* glMapBuffer(GLenum target, GLenum access)
+{
+	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return NULL;
+	}
+
+	if (access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return NULL;
+	}
+
+	// adjust to access bound_buffers
+	target -= GL_ARRAY_BUFFER;
+
+	void* data = NULL;
+	pglGetBufferData(c->bound_buffers[target], &data);
+	return data;
+}
+
+void* glMapNamedBuffer(GLuint buffer, GLenum access)
+{
+	// pglGetBufferData will verify buffer is valid
+	if (access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return NULL;
+	}
+
+	void* data = NULL;
+	pglGetBufferData(buffer, &data);
+	return data;
+}
+
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
 
@@ -10885,6 +10955,10 @@ void glDetachShader(GLuint program, GLuint shader) { }
 GLuint glCreateProgram() { return 0; }
 GLuint glCreateShader(GLenum shaderType) { return 0; }
 GLint glGetUniformLocation(GLuint program, const GLchar* name) { return 0; }
+GLint glGetAttribLocation(GLuint program, const GLchar* name) { return 0; }
+
+GLboolean glUnmapBuffer(GLenum target) { return GL_TRUE; }
+GLboolean glUnmapNamedBuffer(GLuint buffer) { return GL_TRUE; }
 
 // TODO
 void glLineWidth(GLfloat width) { }
@@ -11467,10 +11541,28 @@ vec4 texture_cubemap(GLuint texture, float x, float y, float z)
 //you can use it elsewhere, independently of a glContext
 //etc.
 //
-void clear_screen()
+void pglClearScreen()
 {
 	memset(c->back_buffer.buf, 255, c->back_buffer.w * c->back_buffer.h * 4);
 }
+
+void pglSetInterp(GLsizei n, GLenum* interpolation)
+{
+	c->programs.a[c->cur_program].vs_output_size = n;
+	c->vs_output.size = n;
+
+	memcpy(c->programs.a[c->cur_program].interpolation, interpolation, n*sizeof(GLenum));
+	cvec_reserve_float(&c->vs_output.output_buf, n * MAX_VERTICES);
+
+	//vs_output.interpolation would be already pointing at current program's array
+	//unless the programs array was realloced since the last glUseProgram because
+	//they've created a bunch of programs.  Unlikely they'd be changing a shader
+	//before creating all their shaders but whatever.
+	c->vs_output.interpolation = c->programs.a[c->cur_program].interpolation;
+}
+
+
+
 
 //TODO
 //pglDrawRect(x, y, w, h)
@@ -11495,6 +11587,308 @@ void pglDrawFrame()
 
 }
 
+void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
+{
+	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	//check for usage later
+
+	target -= GL_ARRAY_BUFFER;
+	if (c->bound_buffers[target] == 0) {
+		if (!c->error)
+			c->error = GL_INVALID_OPERATION;
+		return;
+	}
+
+	// data can't be null for user_owned data
+	if (!data) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	// TODO Should I change this in spec functions too?  Or just say don't mix them
+	// otherwise bad things/undefined behavior??
+	if (!c->buffers.a[c->bound_buffers[target]].user_owned) {
+		free(c->buffers.a[c->bound_buffers[target]].data);
+	}
+
+	// user_owned buffer, just assign the pointer, will not free
+	c->buffers.a[c->bound_buffers[target]].data = (u8*)data;
+
+	c->buffers.a[c->bound_buffers[target]].user_owned = GL_TRUE;
+	c->buffers.a[c->bound_buffers[target]].size = size;
+
+	if (target == GL_ELEMENT_ARRAY_BUFFER) {
+		c->vertex_arrays.a[c->cur_vertex_array].element_buffer = c->bound_buffers[target];
+	}
+}
+
+
+void pglTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
+{
+	if (target != GL_TEXTURE_1D) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (border) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	// data can't be null for user_owned data
+	if (!data) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	//ignore level for now
+
+	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
+
+	c->textures.a[cur_tex].w = width;
+
+	if (type != GL_UNSIGNED_BYTE) {
+
+		return;
+	}
+
+	int components;
+	if (format == GL_RED) components = 1;
+	else if (format == GL_RG) components = 2;
+	else if (format == GL_RGB || format == GL_BGR) components = 3;
+	else if (format == GL_RGBA || format == GL_BGRA) components = 4;
+	else {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	// TODO see pglBufferData
+	if (!c->textures.a[cur_tex].user_owned)
+		free(c->textures.a[cur_tex].data);
+
+	//TODO support other internal formats? components should be of internalformat not format
+	c->textures.a[cur_tex].data = (u8*)data;
+	c->textures.a[cur_tex].user_owned = GL_TRUE;
+
+	//TODO
+	//assume for now always RGBA coming in and that's what I'm storing it as
+}
+
+void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data)
+{
+	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
+	//will add others as they're implemented
+	if (target != GL_TEXTURE_2D &&
+	    target != GL_TEXTURE_RECTANGLE &&
+	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
+	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
+	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
+	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
+	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (border) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	// data can't be null for user_owned data
+	if (!data) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	//ignore level for now
+
+	//TODO support other types?
+	if (type != GL_UNSIGNED_BYTE) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	// TODO I don't actually support anything other than GL_RGBA for input or
+	// internal format ... so I should probably make the others errors and
+	// I'm not even checking internalFormat currently..
+	int components;
+	if (format == GL_RED) components = 1;
+	else if (format == GL_RG) components = 2;
+	else if (format == GL_RGB || format == GL_BGR) components = 3;
+	else if (format == GL_RGBA || format == GL_BGRA) components = 4;
+	else {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	int cur_tex;
+
+	if (target == GL_TEXTURE_2D || target == GL_TEXTURE_RECTANGLE) {
+		cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
+
+		c->textures.a[cur_tex].w = width;
+		c->textures.a[cur_tex].h = height;
+
+
+		// TODO see pglBufferData
+		if (!c->textures.a[cur_tex].user_owned)
+			free(c->textures.a[cur_tex].data);
+
+		//TODO support other internal formats? components should be of internalformat not format
+		// If you're using these pgl mapped functions, it assumes you are respecting
+		// your own current unpack alignment settings already
+		c->textures.a[cur_tex].data = (u8*)data;
+		c->textures.a[cur_tex].user_owned = GL_TRUE;
+
+	} else {  //CUBE_MAP
+		/*
+		 * TODO, doesn't make sense to call this six times when mapping, you'd set
+		 * them all up beforehand and set the pointer once...so change this or
+		 * make a pglCubeMapData() function?
+		 *
+		cur_tex = c->bound_textures[GL_TEXTURE_CUBE_MAP-GL_TEXTURE_UNBOUND-1];
+
+		// TODO see pglBufferData
+		if (!c->textures.a[cur_tex].user_owned)
+			free(c->textures.a[cur_tex].data);
+
+		if (width != height) {
+			//TODO spec says INVALID_VALUE, man pages say INVALID_ENUM ?
+			if (!c->error)
+				c->error = GL_INVALID_VALUE;
+			return;
+		}
+
+		int mem_size = width*height*6 * components;
+		if (c->textures.a[cur_tex].w == 0) {
+			c->textures.a[cur_tex].w = width;
+			c->textures.a[cur_tex].h = width; //same cause square
+
+		} else if (c->textures.a[cur_tex].w != width) {
+			//TODO spec doesn't say all sides must have same dimensions but it makes sense
+			//and this site suggests it http://www.opengl.org/wiki/Cubemap_Texture
+			if (!c->error)
+				c->error = GL_INVALID_VALUE;
+			return;
+		}
+
+		target -= GL_TEXTURE_CUBE_MAP_POSITIVE_X; //use target as plane index
+
+		c->textures.a[cur_tex].data = (u8*)data;
+		c->textures.a[cur_tex].user_owned = GL_TRUE;
+		*/
+
+	} //end CUBE_MAP
+}
+
+void pglTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
+{
+	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (border) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	// data can't be null for user_owned data
+	if (!data) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	//ignore level for now
+
+	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
+
+	c->textures.a[cur_tex].w = width;
+	c->textures.a[cur_tex].h = height;
+	c->textures.a[cur_tex].d = depth;
+
+	if (type != GL_UNSIGNED_BYTE) {
+		// TODO
+		return;
+	}
+
+	// TODO add error?  only support GL_RGBA for now
+	int components;
+	if (format == GL_RED) components = 1;
+	else if (format == GL_RG) components = 2;
+	else if (format == GL_RGB || format == GL_BGR) components = 3;
+	else if (format == GL_RGBA || format == GL_BGRA) components = 4;
+	else {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	// TODO see pglBufferData
+	if (!c->textures.a[cur_tex].user_owned)
+		free(c->textures.a[cur_tex].data);
+
+	//TODO support other internal formats? components should be of internalformat not format
+	c->textures.a[cur_tex].data = (u8*)data;
+	c->textures.a[cur_tex].user_owned = GL_TRUE;
+
+	//TODO
+	//assume for now always RGBA coming in and that's what I'm storing it as
+}
+
+
+void pglGetBufferData(GLuint buffer, GLvoid** data)
+{
+	// why'd you even call it?
+	if (!data) {
+		if (!c->error) {
+			c->error = GL_INVALID_VALUE;
+		}
+		return;
+	}
+
+	if (buffer && buffer < c->buffers.size && !c->buffers.a[buffer].deleted) {
+		*data = c->buffers.a[buffer].data;
+	} else if (!c->error) {
+		c->error = GL_INVALID_OPERATION; // matching error code of binding invalid buffer
+	}
+}
+
+void pglGetTextureData(GLuint texture, GLvoid** data)
+{
+	// why'd you even call it?
+	if (!data) {
+		if (!c->error) {
+			c->error = GL_INVALID_VALUE;
+		}
+		return;
+	}
+
+	if (texture < c->textures.size && !c->textures.a[texture].deleted) {
+		*data = c->textures.a[texture].data;
+	} else if (!c->error) {
+		c->error = GL_INVALID_OPERATION; // matching error code of binding invalid buffer
+	}
+}
 
 
 void put_pixel(Color color, int x, int y)
