@@ -32,6 +32,8 @@ include_directories(${SDL2_INCLUDE_DIRS})
 find_package(CURL REQUIRED)
 include_directories(${CURL_INCLUDE_DIR})
 
+find_package(OpenMP REQUIRED)
+
 if(APPLE)
     target_link_libraries(craft glfw
         ${SDL2_LIBRARIES} ${CURL_LIBRARIES})
@@ -39,7 +41,7 @@ endif()
 
 if(UNIX)
     target_link_libraries(craft dl pthread
-        ${SDL2_LIBRARIES} m ${CURL_LIBRARIES})
+        ${SDL2_LIBRARIES} m ${CURL_LIBRARIES} OpenMP::OpenMP_CXX)
 endif()
 
 if(MINGW)
