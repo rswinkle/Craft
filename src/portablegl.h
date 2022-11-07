@@ -1,6 +1,6 @@
 /*
 
-PortableGL 0.94 MIT licensed software renderer that closely mirrors OpenGL 3.x
+PortableGL 0.96 MIT licensed software renderer that closely mirrors OpenGL 3.x
 portablegl.com
 robertwinkler.com
 
@@ -45,8 +45,9 @@ QUICK NOTES:
     MIN_FILTER for a texture.
 
     8-bit per channel RGBA is the only supported format for the framebuffer
-    You can specify the order using the masks in init_glContext. Technically it'd be relatively
-    trivial to add support for other formats but for now we use a u32* to access the buffer.
+    You can specify the order using the masks in init_glContext. Technically
+    it'd be relatively trivial to add support for other formats but for now
+    we use a u32* to access the buffer.
 
 Any PortableGL program has roughly this structure, with some things
 possibly declared globally or passed around in function parameters
@@ -55,7 +56,7 @@ as needed:
     #define WIDTH 640
     #define HEIGHT 480
 
-    // shaders are functions matching thise prototypes
+    // shaders are functions matching these prototypes
     void smooth_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
     void smooth_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms);
 
@@ -81,16 +82,14 @@ as needed:
     // gl_FragDepth or discard, but it's not currently used.  In the future I may
     // have a macro that enables early depth testing *if* that parameter is
     // false for a minor performance boost but canonicaly depth test happens
-    // after frag shader (and scissoring)
+    // after the frag shader (and scissoring)
     GLenum interpolation[4] = { SMOOTH, SMOOTH, SMOOTH, SMOOTH };
     GLuint myshader = pglCreateProgram(smooth_vs, smooth_fs, 4, interpolation, GL_FALSE);
     glUseProgram(myshader);
 
-    My_Uniform the_uniforms;
+    // Red is not actually used since we're using per vert color
+    My_Uniform the_uniforms = { IDENTITY_MAT4(), Red };
     pglSetUniform(&the_uniforms);
-
-    the_uniforms.v_color = Red; // not actually used, using per vert color
-    memcpy(the_uniforms.mvp_mat, identity, sizeof(mat4));
 
     // Your standard OpenGL buffer setup etc. here
     // Like the compatibility profile, we allow/enable a default
@@ -159,6 +158,7 @@ isn't used since they're not currently supported anyway.
 
 MIT License
 Copyright (c) 2011-2022 Robert Winkler
+Copyright (c) 1997-2022 Fabrice Bellard (clipping code from TinyGL)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -172,31 +172,6 @@ TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONIN
 THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
 CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
-
-
-Clipping code copyright (c) Fabrice Bellard from TinyGL
-https://bellard.org/TinyGL/
-
- (C) 1997-1998 Fabrice Bellard
-
-  This software is provided 'as-is', without any express or implied
-  warranty.  In no event will the authors be held liable for any damages
-  arising from the use of this software.
-
-  Permission is granted to anyone to use this software for any purpose,
-  including commercial applications, and to alter it and redistribute it
-  freely, subject to the following restrictions:
-
-  1. The origin of this software must not be misrepresented; you must not
-     claim that you wrote the original software. If you use this software
-     in a product, an acknowledgment in the product and its documentation 
-     *is* required.
-  2. Altered source versions must be plainly marked as such, and must not be
-     misrepresented as being the original software.
-  3. This notice may not be removed or altered from any source distribution.
-
-If you redistribute modified sources, I would appreciate that you
-include in the files history information documenting your changes.
 
 
 */
@@ -262,7 +237,7 @@ extern "C" {
 #define MIN(a, b)  ((a) < (b)) ? (a) : (b)
 #endif
 
-#define MAP(X, A, B, C, D) (X-A)/(B-A) * (D-C) + C
+#define MAP(X, A, B, C, D) ((X)-(A))/((B)-(A)) * ((D)-(C)) + (C)
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -273,10 +248,15 @@ typedef int16_t  i16;
 typedef int32_t  i32;
 typedef int64_t  i64;
 
-
-inline float rsw_rand_float(float min, float max)
+// returns float [0,1)
+inline float rsw_randf()
 {
-	return (rand()/((float)RAND_MAX-1))*(max-min) + min;
+	return rand() / (RAND_MAX + 1.0f);
+}
+
+inline float rsw_randf_range(float min, float max)
+{
+	return min + (max-min) * rsw_randf();
 }
 
 typedef struct vec2
@@ -1074,8 +1054,28 @@ inline vec4 mult_mat4_vec4(mat4 m, vec4 v)
 	return r;
 }
 
+void mult_mat2_mat2(mat2 c, mat2 a, mat2 b);
+
+void mult_mat3_mat3(mat3 c, mat3 a, mat3 b);
 
 void mult_mat4_mat4(mat4 c, mat4 a, mat4 b);
+
+inline void load_rotation_mat2(mat2 mat, float angle)
+{
+#ifndef ROW_MAJOR
+	mat[0] = cos(angle);
+	mat[2] = -sin(angle);
+
+	mat[1] = sin(angle);
+	mat[3] = cos(angle);
+#else
+	mat[0] = cos(angle);
+	mat[1] = -sin(angle);
+
+	mat[2] = sin(angle);
+	mat[3] = cos(angle);
+#endif
+}
 
 void load_rotation_mat3(mat3 mat, vec3 v, float angle);
 
@@ -1416,6 +1416,23 @@ inline float line_findy(Line* line, float x)
 inline float line_findx(Line* line, float y)
 {
 	return -(line->B*y + line->C)/line->A;
+}
+
+// return squared distance from c to line segment between a and b
+inline float sq_dist_pt_segment2d(vec2 a, vec2 b, vec2 c)
+{
+	vec2 ab = sub_vec2s(b, a);
+	vec2 ac = sub_vec2s(c, a);
+	vec2 bc = sub_vec2s(c, b);
+	float e = dot_vec2s(ac, ab);
+
+	// cases where c projects outside ab
+	if (e <= 0.0f) return dot_vec2s(ac, ac);
+	float f = dot_vec2s(ab, ab);
+	if (e >= f) return dot_vec2s(bc, bc);
+
+	// handle cases where c projects onto ab
+	return dot_vec2s(ac, ac) - e * e / f;
 }
 
 
@@ -1826,23 +1843,37 @@ void cvec_free_float(void* vec)
 
 #include <stdint.h>
 
-typedef uint32_t GLuint;
-typedef int32_t  GLint;
-typedef int64_t  GLint64;
-typedef uint64_t GLuint64;
-typedef uint16_t GLushort;
-typedef int16_t  GLshort;
-typedef uint8_t  GLubyte;
-typedef int8_t   GLbyte;
-typedef char     GLchar;
-typedef int32_t  GLsizei;  //they use plain int not unsigned like you'd think
-typedef int      GLenum;
-typedef int      GLbitfield;
-typedef float    GLfloat;
-typedef float    GLclampf;
-typedef double   GLdouble;
-typedef void     GLvoid;
-typedef uint8_t  GLboolean;
+typedef uint8_t   GLboolean;
+typedef char      GLchar;
+typedef int8_t    GLbyte;
+typedef uint8_t   GLubyte;
+typedef int16_t   GLshort;
+typedef uint16_t  GLushort;
+typedef int32_t   GLint;
+typedef uint32_t  GLuint;
+typedef int64_t   GLint64;
+typedef uint64_t  GLuint64;
+
+//they use plain int not unsigned like you'd think
+// TODO(rswinkle) just use uint32_t, remove all checks for < 0 and
+// use for all offset/index type parameters (other than
+// VertexAttribPointer because I already folded on that and have
+// the pgl macro wrapper)
+typedef int32_t   GLsizei;
+
+typedef int32_t   GLenum;
+typedef int32_t   GLbitfield;
+
+typedef intptr_t  GLintptr;
+typedef uintptr_t GLsizeiptr;
+typedef void      GLvoid;
+
+typedef float     GLfloat;
+typedef float     GLclampf;
+
+// not used
+typedef double    GLdouble;
+typedef double    GLclampd;
 
 
 
@@ -1856,7 +1887,7 @@ enum
 	GL_INVALID_FRAMEBUFFER_OPERATION,
 	GL_OUT_OF_MEMORY,
 
-	//buffer types
+	//buffer types (only ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER are currently used)
 	GL_ARRAY_BUFFER,
 	GL_COPY_READ_BUFFER,
 	GL_COPY_WRITE_BUFFER,
@@ -1867,6 +1898,26 @@ enum
 	GL_TRANSFORM_FEEDBACK_BUFFER,
 	GL_UNIFORM_BUFFER,
 	GL_NUM_BUFFER_TYPES,
+
+	// Framebuffer stuff (unused/supported yet)
+	GL_FRAMEBUFFER,
+	GL_DRAW_FRAMEBUFFER,
+	GL_READ_FRAMEBUFFER,
+
+	GL_COLOR_ATTACHMENT0,
+	GL_COLOR_ATTACHMENT1,
+	GL_COLOR_ATTACHMENT2,
+	GL_COLOR_ATTACHMENT3,
+	GL_COLOR_ATTACHMENT4,
+	GL_COLOR_ATTACHMENT5,
+	GL_COLOR_ATTACHMENT6,
+	GL_COLOR_ATTACHMENT7,
+
+	GL_DEPTH_ATTACHMENT,
+	GL_STENCIL_ATTACHMENT,
+	GL_DEPTH_STENCIL_ATTACHMENT,
+
+	GL_RENDERBUFFER,
 
 	//buffer use hints (not used currently)
 	GL_STREAM_DRAW,
@@ -1899,10 +1950,10 @@ enum
 	GL_TRIANGLE_FAN,
 
 	// unsupported primitives because I don't support the geometry shader
-	GL_LINE_STRIP_AJACENCY,
-	GL_LINES_AJACENCY,
-	GL_TRIANGLES_AJACENCY,
-	GL_TRIANGLE_STRIP_AJACENCY,
+	GL_LINE_STRIP_ADJACENCY,
+	GL_LINES_ADJACENCY,
+	GL_TRIANGLES_ADJACENCY,
+	GL_TRIANGLE_STRIP_ADJACENCY,
 
 	//depth functions (and stencil funcs)
 	GL_LESS,
@@ -1994,7 +2045,7 @@ enum
 	GL_LINEAR_MIPMAP_NEAREST,
 	GL_LINEAR_MIPMAP_LINEAR,
 
-	//texture formats
+	//texture/depth/stencil formats
 	GL_RED,
 	GL_RG,
 	GL_RGB,
@@ -2006,6 +2057,21 @@ enum
 	GL_COMPRESSED_RGB,
 	GL_COMPRESSED_RGBA,
 	//lots more go here but not important
+
+	// None of these are used currently just to help porting
+	GL_DEPTH_COMPONENT16,
+	GL_DEPTH_COMPONENT24,
+	GL_DEPTH_COMPONENT32,
+	GL_DEPTH_COMPONENT32F, // PGL uses a float depth buffer
+
+	GL_DEPTH24_STENCIL8,
+	GL_DEPTH32F_STENCIL8,  // <- we do this
+
+	GL_STENCIL_INDEX1,
+	GL_STENCIL_INDEX4,
+	GL_STENCIL_INDEX8,   // this
+	GL_STENCIL_INDEX16,
+
 	
 	//PixelStore parameters
 	GL_UNPACK_ALIGNMENT,
@@ -2132,6 +2198,23 @@ enum
 
 	GL_POLYGON_MODE,
 
+	GL_MAJOR_VERSION,
+	GL_MINOR_VERSION,
+
+	GL_TEXTURE_BINDING_1D,
+	GL_TEXTURE_BINDING_1D_ARRAY,
+	GL_TEXTURE_BINDING_2D,
+	GL_TEXTURE_BINDING_2D_ARRAY,
+
+	// Not supported
+	GL_TEXTURE_BINDING_2D_MULTISAMPLE,
+	GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY,
+
+	GL_TEXTURE_BINDING_3D,
+	GL_TEXTURE_BINDING_BUFFER,
+	GL_TEXTURE_BINDING_CUBE_MAP,
+	GL_TEXTURE_BINDING_RECTANGLE,
+
 	//shader types etc. not used, just here for compatibility add what you
 	//need so you can use your OpenGL code with PortableGL with minimal changes
 	GL_COMPUTE_SHADER,
@@ -2163,6 +2246,7 @@ enum
 #define GL_MAX_VERTEX_ATTRIBS 16
 #define GL_MAX_VERTEX_OUTPUT_COMPONENTS 64
 #define GL_MAX_DRAW_BUFFERS 8
+#define GL_MAX_COLOR_ATTACHMENTS 8
 
 //TODO use prefix like GL_SMOOTH?  PGL_SMOOTH?
 enum { SMOOTH, FLAT, NOPERSPECTIVE };
@@ -2243,7 +2327,7 @@ typedef struct glVertex_Attrib
 	GLint size;      // number of components 1-4
 	GLenum type;     // GL_FLOAT, default
 	GLsizei stride;  //
-	GLsizei offset;  //
+	GLsizeiptr offset;  //
 	GLboolean normalized;
 	unsigned int buf;
 	GLboolean enabled;
@@ -4195,6 +4279,7 @@ typedef struct glContext
 	Color clear_color;
 	vec4 blend_color;
 	GLfloat point_size;
+	GLfloat line_width;
 	GLfloat clear_depth;
 	GLfloat depth_range_near;
 	GLfloat depth_range_far;
@@ -4302,6 +4387,7 @@ void glBindTexture(GLenum target, GLuint texture);
 void glActiveTexture(GLenum texture);
 void glTexParameteri(GLenum target, GLenum pname, GLint param);
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params);
+void glTextureParameteri(GLuint texture, GLenum pname, GLint param);
 void glPixelStorei(GLenum pname, GLint param);
 void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
 void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
@@ -4320,16 +4406,26 @@ void glDeleteBuffers(GLsizei n, const GLuint* buffers);
 void glBindBuffer(GLenum target, GLuint buffer);
 void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
 void glBufferSubData(GLenum target, GLsizei offset, GLsizei size, const GLvoid* data);
-void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, GLsizei offset);
+void* glMapBuffer(GLenum target, GLenum access);
+void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer);
 void glVertexAttribDivisor(GLuint index, GLuint divisor);
 void glEnableVertexAttribArray(GLuint index);
 void glDisableVertexAttribArray(GLuint index);
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
+void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, GLsizei offset);
+void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, GLsizei* indices, GLsizei drawcount);
 void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei primcount);
 void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei primcount, GLuint baseinstance);
 void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, GLsizei offset, GLsizei primcount);
 void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, GLsizei offset, GLsizei primcount, GLuint baseinstance);
+
+//DSA functions (from OpenGL 4.5+)
+#define glCreateBuffers(n, buffers) glGenBuffers(n, buffers)
+void glNamedBufferData(GLuint buffer, GLsizei size, const GLvoid* data, GLenum usage);
+void glNamedBufferSubData(GLuint buffer, GLsizei offset, GLsizei size, const GLvoid* data);
+void* glMapNamedBuffer(GLuint buffer, GLenum access);
+void glCreateTextures(GLenum target, GLsizei n, GLuint* textures);
 
 
 //shaders
@@ -4340,9 +4436,33 @@ void glUseProgram(GLuint program);
 void pglSetUniform(void* uniform);
 
 
+
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
+
 void glGenerateMipmap(GLenum target);
+
+void glGetDoublev(GLenum pname, GLdouble* params);
+void glGetInteger64v(GLenum pname, GLint64* params);
+
+// Framebuffers/Renderbuffers
+void glGenFramebuffers(GLsizei n, GLuint* ids);
+void glBindFramebuffer(GLenum target, GLuint framebuffer);
+void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers);
+void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level);
+void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer);
+GLboolean glIsFramebuffer(GLuint framebuffer);
+
+void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers);
+void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers);
+void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+GLboolean glIsRenderbuffer(GLuint renderbuffer);
+
+void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+GLenum glCheckFramebufferStatus(GLenum target);
 
 
 void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
@@ -4364,8 +4484,6 @@ void glDetachShader(GLuint program, GLuint shader);
 GLint glGetUniformLocation(GLuint program, const GLchar* name);
 GLint glGetAttribLocation(GLuint program, const GLchar* name);
 
-void* glMapBuffer(GLenum target, GLenum access);
-void* glMapNamedBuffer(GLuint buffer, GLenum access);
 GLboolean glUnmapBuffer(GLenum target);
 GLboolean glUnmapNamedBuffer(GLuint buffer);
 
@@ -4418,6 +4536,8 @@ void pglClearScreen();
 //an existing shader.  You'd have to switch between 2 almost identical shaders.
 void pglSetInterp(GLsizei n, GLenum* interpolation);
 
+#define pglVertexAttribPointer(index, size, type, normalized, stride, offset) \
+glVertexAttribPointer(index, size, type, normalized, stride, (void*)(offset))
 
 //TODO
 //pglDrawRect(x, y, w, h)
@@ -4440,7 +4560,9 @@ void pglGetTextureData(GLuint texture, GLvoid** data);
 void put_pixel(Color color, int x, int y);
 
 //Should I have it take a glFramebuffer as paramater?
-void put_line(Color the_color, float x1, float y1, float x2, float y2);
+int put_line(Color the_color, float x1, float y1, float x2, float y2);
+void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2);
+void put_wide_line2(Color the_color, float width, float x1, float y1, float x2, float y2);
 
 void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
 
@@ -4456,7 +4578,8 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
 
 
 
-extern inline float rsw_rand_float(float min, float max);
+extern inline float rsw_randf();
+extern inline float rsw_randf_range(float min, float max);
 extern inline vec2 make_vec2(float x, float y);
 extern inline vec3 make_vec3(float x, float y, float z);
 extern inline vec4 make_vec4(float x, float y, float z, float w);
@@ -4617,6 +4740,53 @@ extern inline float line_findx(Line* line, float y);
 
 
 
+void mult_mat2_mat2(mat2 c, mat2 a, mat2 b)
+{
+#ifndef ROW_MAJOR
+	c[0] = a[0]*b[0] + a[2]*b[1];
+	c[2] = a[0]*b[2] + a[2]*b[3];
+
+	c[1] = a[1]*b[0] + a[3]*b[1];
+	c[3] = a[1]*b[2] + a[3]*b[3];
+#else
+	c[0] = a[0]*b[0] + a[1]*b[2];
+	c[1] = a[0]*b[1] + a[1]*b[3];
+
+	c[2] = a[2]*b[0] + a[3]*b[2];
+	c[3] = a[2]*b[1] + a[3]*b[3];
+#endif
+}
+
+extern inline void load_rotation_mat2(mat2 mat, float angle);
+
+void mult_mat3_mat3(mat3 c, mat3 a, mat3 b)
+{
+#ifndef ROW_MAJOR
+	c[0] = a[0]*b[0] + a[3]*b[1] + a[6]*b[2];
+	c[3] = a[0]*b[3] + a[3]*b[4] + a[6]*b[5];
+	c[6] = a[0]*b[6] + a[3]*b[7] + a[6]*b[8];
+
+	c[1] = a[1]*b[0] + a[4]*b[1] + a[7]*b[2];
+	c[4] = a[1]*b[3] + a[4]*b[4] + a[7]*b[5];
+	c[7] = a[1]*b[6] + a[4]*b[7] + a[7]*b[8];
+
+	c[2] = a[2]*b[0] + a[5]*b[1] + a[8]*b[2];
+	c[5] = a[2]*b[3] + a[5]*b[4] + a[8]*b[5];
+	c[8] = a[2]*b[6] + a[5]*b[7] + a[8]*b[8];
+#else
+	c[0] = a[0]*b[0] + a[1]*b[3] + a[2]*b[6];
+	c[1] = a[0]*b[1] + a[1]*b[4] + a[2]*b[7];
+	c[2] = a[0]*b[2] + a[1]*b[5] + a[2]*b[8];
+
+	c[3] = a[3]*b[0] + a[4]*b[3] + a[5]*b[6];
+	c[4] = a[3]*b[1] + a[4]*b[4] + a[5]*b[7];
+	c[5] = a[3]*b[2] + a[4]*b[5] + a[5]*b[8];
+
+	c[6] = a[6]*b[0] + a[7]*b[3] + a[8]*b[6];
+	c[7] = a[6]*b[1] + a[7]*b[4] + a[8]*b[7];
+	c[8] = a[6]*b[2] + a[7]*b[5] + a[8]*b[8];
+#endif
+}
 
 void load_rotation_mat3(mat3 mat, vec3 v, float angle)
 {
@@ -7299,7 +7469,7 @@ static glContext* c;
 static Color blend_pixel(vec4 src, vec4 dst);
 static void draw_pixel_vec2(vec4 cf, vec2 pos, float z);
 static void draw_pixel(vec4 cf, int x, int y, float z);
-static void run_pipeline(GLenum mode, GLint first, GLsizei count, GLsizei instance, GLuint base_instance, GLboolean use_elements);
+static void run_pipeline(GLenum mode, GLuint first, GLsizei count, GLsizei instance, GLuint base_instance, GLboolean use_elements);
 
 static void draw_triangle_clip(glVertex* v0, glVertex* v1, glVertex* v2, unsigned int provoke, int clip_bit);
 static void draw_triangle_point(glVertex* v0, glVertex* v1,  glVertex* v2, unsigned int provoke);
@@ -7310,6 +7480,7 @@ static void draw_triangle(glVertex* v0, glVertex* v1, glVertex* v2, unsigned int
 
 static void draw_line_clip(glVertex* v1, glVertex* v2);
 static void draw_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, unsigned int provoke);
+static void draw_thick_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, unsigned int provoke);
 static void draw_line_smooth_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, unsigned int provoke);
 
 /* this clip epsilon is needed to avoid some rounding errors after
@@ -7401,38 +7572,32 @@ static void do_vertex(glVertex_Attrib* v, int* enabled, unsigned int num_enabled
 }
 
 
-static void vertex_stage(GLint first, GLsizei count, GLsizei instance_id, GLuint base_instance, GLboolean use_elements)
+static void vertex_stage(GLuint first, GLsizei count, GLsizei instance_id, GLuint base_instance, GLboolean use_elements)
 {
 	unsigned int i, j, vert, num_enabled;
-	vec4 tmpvec4;
 	u8* buf_pos;
 
 	//save checking if enabled on every loop if we build this first
 	//also initialize the vertex_attrib space
 	float vec4_init[] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	int enabled[GL_MAX_VERTEX_ATTRIBS];
-	memset(enabled, 0, sizeof(int)*GL_MAX_VERTEX_ATTRIBS);
+	int enabled[GL_MAX_VERTEX_ATTRIBS] = { 0 };
 	glVertex_Attrib* v = c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs;
 	GLuint elem_buffer = c->vertex_arrays.a[c->cur_vertex_array].element_buffer;
 
 	for (i=0, j=0; i<GL_MAX_VERTEX_ATTRIBS; ++i) {
-		memcpy(&c->vertex_attribs_vs[i], vec4_init, sizeof(vec4));
-
 		if (v[i].enabled) {
 			if (v[i].divisor == 0) {
+				// no need to set to defalt vector here because it's handled in do_vertex()
 				enabled[j++] = i;
-				//printf("%d is enabled\n", i);
 			} else if (!(instance_id % v[i].divisor)) {   //set instanced attributes if necessary
+				// only reset to default vector right before updating, because
+				// it has to stay the same across multiple instances for divisors > 1
+				memcpy(&c->vertex_attribs_vs[i], vec4_init, sizeof(vec4));
+
 				int n = instance_id/v[i].divisor + base_instance;
 				buf_pos = (u8*)c->buffers.a[v[i].buf].data + v[i].offset + v[i].stride*n;
 
-				SET_VEC4(tmpvec4, 0.0f, 0.0f, 0.0f, 1.0f);
-
-				memcpy(&tmpvec4, buf_pos, sizeof(float)*v[enabled[j]].size); //TODO why do I have v[enabled[j]].size and not just v[i].size?
-
-				//c->cur_vertex_array->vertex_attribs[enabled[j]].buf->data;
-
-				c->vertex_attribs_vs[i] = tmpvec4;
+				memcpy(&c->vertex_attribs_vs[i], buf_pos, sizeof(float)*v[i].size);
 			}
 		}
 	}
@@ -7517,7 +7682,7 @@ static void draw_point(glVertex* vert)
 	}
 }
 
-static void run_pipeline(GLenum mode, GLint first, GLsizei count, GLsizei instance, GLuint base_instance, GLboolean use_elements)
+static void run_pipeline(GLenum mode, GLuint first, GLsizei count, GLsizei instance, GLuint base_instance, GLboolean use_elements)
 {
 	unsigned int i, vert;
 	int provoke;
@@ -7697,14 +7862,10 @@ static void draw_line_clip(glVertex* v1, glVertex* v2)
 		t1 = mult_mat4_vec4(c->vp_mat, p1);
 		t2 = mult_mat4_vec4(c->vp_mat, p2);
 
-		//no need
-		//memcpy(v1_out, v1->vs_out, c->vs_output.size*sizeof(float));
-		//memcpy(v2_out, v2->vs_out, c->vs_output.size*sizeof(float));
-
-		if (!c->line_smooth)
+		if (c->line_width < 1.5f)
 			draw_line_shader(t1, t2, v1->vs_out, v2->vs_out, provoke);
 		else
-			draw_line_smooth_shader(t1, t2, v1->vs_out, v2->vs_out, provoke);
+			draw_thick_line_shader(t1, t2, v1->vs_out, v2->vs_out, provoke);
 	} else {
 
 		d = sub_vec4s(p2, p1);
@@ -7715,8 +7876,8 @@ static void draw_line_clip(glVertex* v1, glVertex* v2)
 		    clip_line(-d.x+d.w,  p1.x-p1.w, &tmin, &tmax) &&
 		    clip_line( d.y+d.w, -p1.y-p1.w, &tmin, &tmax) &&
 		    clip_line(-d.y+d.w,  p1.y-p1.w, &tmin, &tmax) &&
-			clip_line( d.z+d.w, -p1.z-p1.w, &tmin, &tmax) &&
-			clip_line(-d.z+d.w,  p1.z-p1.w, &tmin, &tmax)) {
+		    clip_line( d.z+d.w, -p1.z-p1.w, &tmin, &tmax) &&
+		    clip_line(-d.z+d.w,  p1.z-p1.w, &tmin, &tmax)) {
 
 			//printf("%f %f\n", tmin, tmax);
 
@@ -7730,10 +7891,10 @@ static void draw_line_clip(glVertex* v1, glVertex* v2)
 
 			interpolate_clipped_line(v1, v2, v1_out, v2_out, tmin, tmax);
 
-			if (!c->line_smooth)
-				draw_line_shader(t1, t2, v1_out, v2_out, provoke);
+			if (c->line_width < 1.5f)
+				draw_line_shader(t1, t2, v1->vs_out, v2->vs_out, provoke);
 			else
-				draw_line_smooth_shader(t1, t2, v1_out, v2_out, provoke);
+				draw_thick_line_shader(t1, t2, v1->vs_out, v2->vs_out, provoke);
 		}
 	}
 }
@@ -7784,7 +7945,6 @@ static void draw_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, uns
 	Line line = make_Line(x1, y1, x2, y2);
 
 	float t, x, y, z, w;
-
 
 	vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
 	vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
@@ -7837,7 +7997,6 @@ static void draw_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, uns
 			if (!c->builtins.discard)
 				draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
 
-line_1:
 			if (line_func(&line, x+0.5f, y-1) < 0) //A*(x+0.5f) + B*(y-1) + C < 0)
 				++x;
 		}
@@ -7859,7 +8018,6 @@ line_1:
 			if (!c->builtins.discard)
 				draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
 
-line_2:
 			if (line_func(&line, x+1, y-0.5f) > 0) //A*(x+1) + B*(y-0.5f) + C > 0)
 				--y;
 		}
@@ -7881,7 +8039,6 @@ line_2:
 			if (!c->builtins.discard)
 				draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
 
-line_3:
 			if (line_func(&line, x+1, y+0.5f) < 0) //A*(x+1) + B*(y+0.5f) + C < 0)
 				++y;
 		}
@@ -7904,9 +8061,299 @@ line_3:
 			if (!c->builtins.discard)
 				draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
 
-line_4:
 			if (line_func(&line, x+0.5f, y+1) > 0) //A*(x+0.5f) + B*(y+1) + C > 0)
 				++x;
+		}
+	}
+}
+
+static int draw_perp_line(float m, float x1, float y1, float x2, float y2)
+{
+	// Assume that caller (draw_thick_line_shader) always arranged x1 < x2
+	Line line = make_Line(x1, y1, x2, y2);
+
+	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
+	void* uniform = c->programs.a[c->cur_program].uniform;
+	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
+
+	float i_x1, i_y1, i_x2, i_y2;
+	i_x1 = floor(x1) + 0.5;
+	i_y1 = floor(y1) + 0.5;
+	i_x2 = floor(x2) + 0.5;
+	i_y2 = floor(y2) + 0.5;
+
+	// TODO the central ideal lines are clipped but perpendiculars of wide lines
+	// could go off the edge
+	float x_min, x_max, y_min, y_max;
+	x_min = i_x1;
+	x_max = i_x2; //always left to right;
+	if (m <= 0) {
+		y_min = i_y2;
+		y_max = i_y1;
+	} else {
+		y_min = i_y1;
+		y_max = i_y2;
+	}
+
+	float x, y;
+	// same z for whole line was already set in caller
+	float z = c->builtins.gl_FragCoord.z;
+
+	int first_is_diag = GL_FALSE;
+	int w = c->back_buffer.w, h = c->back_buffer.h;
+
+	//4 cases based on slope
+	if (m <= -1) {     //(-infinite, -1]
+		//NOTE(rswinkle): double checking the first step but better than duplicating
+		// so much code imo
+		if (line_func(&line, x_min+0.5f, y_max-1) < 0) {
+			first_is_diag = GL_TRUE;
+		}
+		for (x = x_min, y = y_max; y>=y_min && x<=x_max; --y) {
+			// poor mans clipping, don't think it's worth real clipping
+			if (x >= 0 && x < w && y >= 0 && y < h) {
+				c->builtins.gl_FragCoord.x = x;
+				c->builtins.gl_FragCoord.y = y;
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+
+				if (!c->builtins.discard)
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
+			}
+
+			if (line_func(&line, x+0.5f, y-1) < 0) //A*(x+0.5f) + B*(y-1) + C < 0)
+				++x;
+		}
+	} else if (m <= 0) {     //(-1, 0]
+		if (line_func(&line, x_min+1, y_max-0.5f) > 0) {
+			first_is_diag = GL_TRUE;
+		}
+		for (x = x_min, y = y_max; x<=x_max && y>=y_min; ++x) {
+			if (x >= 0 && x < w && y >= 0 && y < h) {
+				c->builtins.gl_FragCoord.x = x;
+				c->builtins.gl_FragCoord.y = y;
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+
+				if (!c->builtins.discard)
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
+			}
+
+			if (line_func(&line, x+1, y-0.5f) > 0) //A*(x+1) + B*(y-0.5f) + C > 0)
+				--y;
+		}
+	} else if (m <= 1) {     //(0, 1]
+		if (line_func(&line, x_min+1, y_min+0.5f) < 0) {
+			first_is_diag = GL_TRUE;
+		}
+		for (x = x_min, y = y_min; x <= x_max && y <= y_max; ++x) {
+			if (x >= 0 && x < w && y >= 0 && y < h) {
+				c->builtins.gl_FragCoord.x = x;
+				c->builtins.gl_FragCoord.y = y;
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+
+				if (!c->builtins.discard)
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
+			}
+			if (line_func(&line, x+1, y+0.5f) < 0) //A*(x+1) + B*(y+0.5f) + C < 0)
+				++y;
+		}
+	} else {    //(1, +infinite)
+		if (line_func(&line, x_min+0.5f, y_min+1) > 0) {
+			first_is_diag = GL_TRUE;
+		}
+		for (x = x_min, y = y_min; y<=y_max && x <= x_max; ++y) {
+			if (x >= 0 && x < w && y >= 0 && y < h) {
+				c->builtins.gl_FragCoord.x = x;
+				c->builtins.gl_FragCoord.y = y;
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+
+				if (!c->builtins.discard)
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth);
+			}
+			if (line_func(&line, x+0.5f, y+1) > 0) //A*(x+0.5f) + B*(y+1) + C > 0)
+				++x;
+		}
+	}
+	return first_is_diag;
+}
+
+static void draw_thick_line_shader(vec4 v1, vec4 v2, float* v1_out, float* v2_out, unsigned int provoke)
+{
+	float tmp;
+	float* tmp_ptr;
+
+	vec3 hp1 = vec4_to_vec3h(v1);
+	vec3 hp2 = vec4_to_vec3h(v2);
+
+	//print_vec3(hp1, "\n");
+	//print_vec3(hp2, "\n");
+
+	float w1 = v1.w;
+	float w2 = v2.w;
+
+	float x1 = hp1.x, x2 = hp2.x, y1 = hp1.y, y2 = hp2.y;
+	float z1 = hp1.z, z2 = hp2.z;
+
+	//always draw from left to right
+	if (x2 < x1) {
+		tmp = x1;
+		x1 = x2;
+		x2 = tmp;
+		tmp = y1;
+		y1 = y2;
+		y2 = tmp;
+
+		tmp = z1;
+		z1 = z2;
+		z2 = tmp;
+
+		tmp = w1;
+		w1 = w2;
+		w2 = tmp;
+
+		tmp_ptr = v1_out;
+		v1_out = v2_out;
+		v2_out = tmp_ptr;
+	}
+
+	//calculate slope and implicit line parameters once
+	//could just use my Line type/constructor as in draw_triangle
+	float m = (y2-y1)/(x2-x1);
+	Line line = make_Line(x1, y1, x2, y2);
+	vec2 ab = { line.A, line.B };
+	normalize_vec2(&ab);
+	ab = scale_vec2(ab, c->line_width/2.0f);
+
+	float t, x, y, z, w;
+
+	vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+	vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+	float line_length_squared = length_vec2(sub_p2p1);
+	line_length_squared *= line_length_squared;
+
+	float i_x1, i_y1, i_x2, i_y2;
+	i_x1 = floor(p1.x) + 0.5;
+	i_y1 = floor(p1.y) + 0.5;
+	i_x2 = floor(p2.x) + 0.5;
+	i_y2 = floor(p2.y) + 0.5;
+
+	float x_min, x_max, y_min, y_max;
+	x_min = i_x1;
+	x_max = i_x2; //always left to right;
+	if (m <= 0) {
+		y_min = i_y2;
+		y_max = i_y1;
+	} else {
+		y_min = i_y1;
+		y_max = i_y2;
+	}
+
+	//printf("%f %f %f %f   =\n", i_x1, i_y1, i_x2, i_y2);
+	//printf("%f %f %f %f   x_min etc\n", x_min, x_max, y_min, y_max);
+
+	z1 = MAP(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+	z2 = MAP(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+
+	int diag;
+
+	//4 cases based on slope
+	if (m <= -1) {     //(-infinite, -1]
+		for (x = x_min, y = y_max; y>=y_min && x<=x_max; --y) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+
+			z = (1 - t) * z1 + t * z2;
+			w = (1 - t) * w1 + t * w2;
+
+			// These are constant for the whole perpendicular
+			// I'm pretending the special gap perpendiculars get the
+			// same values for the sake of simplicity
+			c->builtins.gl_FragCoord.z = z;
+			c->builtins.gl_FragCoord.w = 1/w;
+
+			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+			diag = draw_perp_line(-1/m, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+0.5f, y-1) < 0) {
+				if (diag) {
+					draw_perp_line(-1/m, x-ab.x, y-1-ab.y, x+ab.x, y-1+ab.y);
+				}
+				++x;
+			}
+		}
+	} else if (m <= 0) {     //(-1, 0]
+		float inv_m = m ? -1/m : INFINITY;
+		for (x = x_min, y = y_max; x<=x_max && y>=y_min; ++x) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+
+			z = (1 - t) * z1 + t * z2;
+			w = (1 - t) * w1 + t * w2;
+
+			c->builtins.gl_FragCoord.z = z;
+			c->builtins.gl_FragCoord.w = 1/w;
+
+			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+			diag = draw_perp_line(inv_m, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+1, y-0.5f) > 0) {
+				if (diag) {
+					draw_perp_line(inv_m, x+1-ab.x, y-ab.y, x+1+ab.x, y+ab.y);
+				}
+				--y;
+			}
+		}
+	} else if (m <= 1) {     //(0, 1]
+		for (x = x_min, y = y_min; x <= x_max && y <= y_max; ++x) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+
+			z = (1 - t) * z1 + t * z2;
+			w = (1 - t) * w1 + t * w2;
+
+			c->builtins.gl_FragCoord.z = z;
+			c->builtins.gl_FragCoord.w = 1/w;
+
+			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+			diag = draw_perp_line(-1/m, x+ab.x, y+ab.y, x-ab.x, y-ab.y);
+
+			if (line_func(&line, x+1, y+0.5f) < 0) {
+				if (diag) {
+					draw_perp_line(-1/m, x+1+ab.x, y+ab.y, x+1-ab.x, y-ab.y);
+				}
+				++y;
+			}
+		}
+
+	} else {    //(1, +infinite)
+		for (x = x_min, y = y_min; y<=y_max && x <= x_max; ++y) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+
+			z = (1 - t) * z1 + t * z2;
+			w = (1 - t) * w1 + t * w2;
+
+			c->builtins.gl_FragCoord.z = z;
+			c->builtins.gl_FragCoord.w = 1/w;
+
+			setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+			diag = draw_perp_line(-1/m, x+ab.x, y+ab.y, x-ab.x, y-ab.y);
+
+			if (line_func(&line, x+0.5f, y+1) > 0) {
+				if (diag) {
+					draw_perp_line(-1/m, x+ab.x, y+1+ab.y, x-ab.x, y+1-ab.y);
+				}
+				++x;
+			}
 		}
 	}
 }
@@ -8546,6 +8993,11 @@ static void draw_triangle_fill(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 					SET_VEC4(builtins.gl_FragCoord, x, y, z, tmp2);
 					builtins.discard = GL_FALSE;
 					builtins.gl_FragDepth = z;
+
+					// have to do this here instead of outside the loop because somehow openmp messes it up
+					// TODO probably some way to prevent that but it's just copying an int so no big deal
+					builtins.gl_InstanceID = c->builtins.gl_InstanceID;
+
 					c->programs.a[c->cur_program].fragment_shader(fs_input, &builtins, c->programs.a[c->cur_program].uniform);
 					if (!builtins.discard) {
 
@@ -8959,12 +9411,12 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	context->user_alloced_backbuf = *back != NULL;
 	if (!*back) {
 		int bytes_per_pixel = (bitdepth + CHAR_BIT-1) / CHAR_BIT;
-		*back = (u32*) malloc(w * h * bytes_per_pixel);
+		*back = (u32*)malloc(w * h * bytes_per_pixel);
 		if (!*back)
 			return 0;
 	}
 
-	context->zbuf.buf = (u8*) malloc(w*h * sizeof(float));
+	context->zbuf.buf = (u8*)malloc(w*h * sizeof(float));
 	if (!context->zbuf.buf) {
 		if (!context->user_alloced_backbuf) {
 			free(*back);
@@ -8973,7 +9425,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 		return 0;
 	}
 
-	context->stencil_buf.buf = (u8*) malloc(w*h);
+	context->stencil_buf.buf = (u8*)malloc(w*h);
 	if (!context->stencil_buf.buf) {
 		if (!context->user_alloced_backbuf) {
 			free(*back);
@@ -9026,6 +9478,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	context->clear_color = make_Color(0, 0, 0, 0);
 	SET_VEC4(context->blend_color, 0, 0, 0, 0);
 	context->point_size = 1.0f;
+	context->line_width = 1.0f;
 	context->clear_depth = 1.0f;
 	context->depth_range_near = 0.0f;
 	context->depth_range_far = 1.0f;
@@ -9105,23 +9558,27 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	cvec_push_glVertex_Array(&context->vertex_arrays, tmp_va);
 	context->cur_vertex_array = 0;
 
-	//setup buffers and textures
-	//need to push back once since 0 is invalid
-	//valid buffers have to start at position 1
+	// buffer 0 is invalid
 	glBuffer tmp_buf;
 	tmp_buf.user_owned = GL_TRUE;
 	tmp_buf.deleted = GL_FALSE;
+	cvec_push_glBuffer(&context->buffers, tmp_buf);
 
+	// texture 0 is valid/default
 	glTexture tmp_tex;
-	tmp_tex.user_owned = GL_TRUE;
-	tmp_tex.deleted = GL_FALSE;
-	tmp_tex.format = GL_RGBA;
 	tmp_tex.type = GL_TEXTURE_UNBOUND;
+	tmp_tex.mag_filter = GL_LINEAR;
+	tmp_tex.min_filter = GL_LINEAR;
+	tmp_tex.wrap_s = GL_REPEAT;
+	tmp_tex.wrap_t = GL_REPEAT;
+	tmp_tex.wrap_r = GL_REPEAT;
 	tmp_tex.data = NULL;
+	tmp_tex.deleted = GL_FALSE;
+	tmp_tex.user_owned = GL_TRUE;
+	tmp_tex.format = GL_RGBA;
 	tmp_tex.w = 0;
 	tmp_tex.h = 0;
 	tmp_tex.d = 0;
-	cvec_push_glBuffer(&context->buffers, tmp_buf);
 	cvec_push_glTexture(&context->textures, tmp_tex);
 
 	return 1;
@@ -9170,9 +9627,9 @@ void set_glContext(glContext* context)
 void* pglResizeFramebuffer(size_t w, size_t h)
 {
 	u8* tmp;
-	tmp = (u8*) realloc(c->zbuf.buf, w*h * sizeof(float));
+	tmp = (u8*)realloc(c->zbuf.buf, w*h * sizeof(float));
 	if (!tmp) {
-		if (c->error == GL_NO_ERROR)
+		if (!c->error)
 			c->error = GL_OUT_OF_MEMORY;
 		return NULL;
 	}
@@ -9181,9 +9638,9 @@ void* pglResizeFramebuffer(size_t w, size_t h)
 	c->zbuf.h = h;
 	c->zbuf.lastrow = c->zbuf.buf + (h-1)*w*sizeof(float);
 
-	tmp = (u8*) realloc(c->back_buffer.buf, w*h * sizeof(u32));
+	tmp = (u8*)realloc(c->back_buffer.buf, w*h * sizeof(u32));
 	if (!tmp) {
-		if (c->error == GL_NO_ERROR)
+		if (!c->error)
 			c->error = GL_OUT_OF_MEMORY;
 		return NULL;
 	}
@@ -9201,7 +9658,7 @@ GLubyte* glGetString(GLenum name)
 {
 	static GLubyte vendor[] = "Robert Winkler";
 	static GLubyte renderer[] = "PortableGL";
-	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.94";
+	static GLubyte version[] = "OpenGL 3.x-ish PortableGL 0.96";
 	static GLubyte shading_language[] = "C/C++";
 
 	switch (name) {
@@ -9263,23 +9720,23 @@ void glDeleteVertexArrays(GLsizei n, const GLuint* arrays)
 
 void glGenBuffers(GLsizei n, GLuint* buffers)
 {
-	glBuffer tmp;
-	tmp.user_owned = GL_TRUE;  // NOTE: Doesn't really matter at this point
-	tmp.data = NULL;
-	tmp.deleted = GL_FALSE;
-
 	//fill up empty slots first
-	--n;
-	for (int i=1; i<c->buffers.size && n>=0; ++i) {
+	int j = 0;
+	for (int i=1; i<c->buffers.size && j<n; ++i) {
 		if (c->buffers.a[i].deleted) {
-			c->buffers.a[i] = tmp;
-			buffers[n--] = i;
+			c->buffers.a[i].deleted = GL_FALSE;
+			buffers[j++] = i;
 		}
 	}
 
-	for (; n>=0; --n) {
-		cvec_push_glBuffer(&c->buffers, tmp);
-		buffers[n] = c->buffers.size-1;
+	if (j != n) {
+		int s = c->buffers.size;
+		cvec_extend_glBuffer(&c->buffers, n-j);
+		for (int i=s; j<n; i++) {
+			c->buffers.a[i].data = NULL;
+			c->buffers.a[i].deleted = GL_FALSE;
+			buffers[j++] = i;
+		}
 	}
 }
 
@@ -9298,40 +9755,77 @@ void glDeleteBuffers(GLsizei n, const GLuint* buffers)
 
 		if (!c->buffers.a[buffers[i]].user_owned) {
 			free(c->buffers.a[buffers[i]].data);
-			c->buffers.a[buffers[i]].data = NULL;
 		}
-
+		c->buffers.a[buffers[i]].data = NULL;
 		c->buffers.a[buffers[i]].deleted = GL_TRUE;
 	}
 }
 
 void glGenTextures(GLsizei n, GLuint* textures)
 {
-	glTexture tmp;
-	//SET_VEC4(tmp.border_color, 0, 0, 0, 0);
-	tmp.mag_filter = GL_LINEAR;
-	tmp.min_filter = GL_LINEAR; //NOTE: spec says should be mipmap_linear
-	tmp.wrap_s = GL_REPEAT;
-	tmp.wrap_t = GL_REPEAT;
-	tmp.data = NULL;
-	tmp.deleted = GL_FALSE;
-	tmp.user_owned = GL_TRUE;  // NOTE: could be either before data
-	tmp.format = GL_RGBA;
-	tmp.type = GL_TEXTURE_UNBOUND;
-	tmp.w = 0;
-	tmp.h = 0;
-	tmp.d = 0;
-
-	--n;
-	for (int i=0; i<c->textures.size && n>=0; ++i) {
+	int j = 0;
+	for (int i=0; i<c->textures.size && j<n; ++i) {
 		if (c->textures.a[i].deleted) {
-			c->textures.a[i] = tmp;
-			textures[n--] = i;
+			c->textures.a[i].deleted = GL_FALSE;
+			c->textures.a[i].type = GL_TEXTURE_UNBOUND;
+			textures[j++] = i;
 		}
 	}
-	for (; n>=0; --n) {
-		cvec_push_glTexture(&c->textures, tmp);
-		textures[n] = c->textures.size-1;
+	if (j != n) {
+		int s = c->textures.size;
+		cvec_extend_glTexture(&c->textures, n-j);
+		for (int i=s; j<n; i++) {
+			c->textures.a[i].deleted = GL_FALSE;
+			c->textures.a[i].type = GL_TEXTURE_UNBOUND;
+			textures[j++] = i;
+		}
+	}
+}
+
+// I just set everything even if not everything applies to the type
+// see section 3.8.15 pg 181 of spec for what it's supposed to be
+#define INIT_TEX(tex, target) \
+	do { \
+	tex.type = target; \
+	tex.mag_filter = GL_LINEAR; \
+	tex.min_filter = GL_LINEAR; \
+	tex.wrap_s = GL_REPEAT; \
+	tex.wrap_t = GL_REPEAT; \
+	tex.wrap_r = GL_REPEAT; \
+	tex.data = NULL; \
+	tex.deleted = GL_FALSE; \
+	tex.user_owned = GL_TRUE; \
+	tex.format = GL_RGBA; \
+	tex.w = 0; \
+	tex.h = 0; \
+	tex.d = 0; \
+	} while (0)
+
+void glCreateTextures(GLenum target, GLsizei n, GLuint* textures)
+{
+	if (target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	target -= GL_TEXTURE_UNBOUND + 1;
+	int j = 0;
+	for (int i=0; i<c->textures.size && j<n; ++i) {
+		if (c->textures.a[i].deleted) {
+			INIT_TEX(c->textures.a[i], target);
+			textures[j++] = i;
+		}
+	}
+	if (j != n) {
+		int s = c->textures.size;
+		cvec_extend_glTexture(&c->textures, n-j);
+		for (int i=s; j<n; i++) {
+			INIT_TEX(c->textures.a[i], target);
+			c->textures.a[i].deleted = GL_FALSE;
+			c->textures.a[i].type = GL_TEXTURE_UNBOUND;
+			textures[j++] = i;
+		}
 	}
 }
 
@@ -9342,8 +9836,8 @@ void glDeleteTextures(GLsizei n, GLuint* textures)
 		if (!textures[i] || textures[i] >= c->textures.size)
 			continue;
 
-		// NOTE(rswinkle): type is stored as correct index not the raw enum value so no need to
-		// subtract here see glBindTexture
+		// NOTE(rswinkle): type is stored as correct index not the raw enum value
+		// so no need to subtract here see glBindTexture
 		type = c->textures.a[textures[i]].type;
 		if (textures[i] == c->bound_textures[type])
 			c->bound_textures[type] = 0;
@@ -9407,10 +9901,9 @@ void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
 		return;
 	}
 
-	//always NULL or valid
-	free(c->buffers.a[c->bound_buffers[target]].data);
-
-	if (!(c->buffers.a[c->bound_buffers[target]].data = (u8*) malloc(size))) {
+	// the spec says any pre-existing data store is deleted there's no reason to
+	// c->buffers.a[c->bound_buffers[target]].data is always NULL or valid
+	if (!(c->buffers.a[c->bound_buffers[target]].data = (u8*)realloc(c->buffers.a[c->bound_buffers[target]].data, size))) {
 		if (!c->error)
 			c->error = GL_OUT_OF_MEMORY;
 		// GL state is undefined from here on
@@ -9453,6 +9946,55 @@ void glBufferSubData(GLenum target, GLsizei offset, GLsizei size, const GLvoid* 
 	memcpy(&c->buffers.a[c->bound_buffers[target]].data[offset], data, size);
 }
 
+void glNamedBufferData(GLuint buffer, GLsizei size, const GLvoid* data, GLenum usage)
+{
+	//check for usage later
+
+	if (buffer == 0 || buffer >= c->buffers.size || c->buffers.a[buffer].deleted) {
+		if (!c->error)
+			c->error = GL_INVALID_OPERATION;
+		return;
+	}
+
+	//always NULL or valid
+	free(c->buffers.a[buffer].data);
+
+	if (!(c->buffers.a[buffer].data = (u8*)malloc(size))) {
+		if (!c->error)
+			c->error = GL_OUT_OF_MEMORY;
+		// GL state is undefined from here on
+		return;
+	}
+
+	if (data) {
+		memcpy(c->buffers.a[buffer].data, data, size);
+	}
+
+	c->buffers.a[buffer].user_owned = GL_FALSE;
+	c->buffers.a[buffer].size = size;
+
+	if (c->buffers.a[buffer].type == GL_ELEMENT_ARRAY_BUFFER - GL_ARRAY_BUFFER) {
+		c->vertex_arrays.a[c->cur_vertex_array].element_buffer = buffer;
+	}
+}
+
+void glNamedBufferSubData(GLuint buffer, GLsizei offset, GLsizei size, const GLvoid* data)
+{
+	if (buffer == 0 || buffer >= c->buffers.size || c->buffers.a[buffer].deleted) {
+		if (!c->error)
+			c->error = GL_INVALID_OPERATION;
+		return;
+	}
+
+	if (offset + size > c->buffers.a[buffer].size) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	memcpy(&c->buffers.a[buffer].data[offset], data, size);
+}
+
 void glBindTexture(GLenum target, GLuint texture)
 {
 	if (target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES) {
@@ -9466,7 +10008,7 @@ void glBindTexture(GLenum target, GLuint texture)
 	if (texture < c->textures.size && !c->textures.a[texture].deleted) {
 		if (c->textures.a[texture].type == GL_TEXTURE_UNBOUND) {
 			c->bound_textures[target] = texture;
-			c->textures.a[texture].type = target;
+			INIT_TEX(c->textures.a[texture], target);
 		} else if (c->textures.a[texture].type == target) {
 			c->bound_textures[target] = texture;
 		} else if (!c->error) {
@@ -9475,6 +10017,66 @@ void glBindTexture(GLenum target, GLuint texture)
 	} else if (!c->error) {
 		c->error = GL_INVALID_VALUE;
 	}
+}
+
+static void set_texparami(glTexture* tex, GLenum pname, GLint param)
+{
+	if (pname != GL_TEXTURE_MIN_FILTER && pname != GL_TEXTURE_MAG_FILTER &&
+	    pname != GL_TEXTURE_WRAP_S && pname != GL_TEXTURE_WRAP_T && pname != GL_TEXTURE_WRAP_R) {
+
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (pname == GL_TEXTURE_MIN_FILTER) {
+		if (param != GL_NEAREST && param != GL_LINEAR && param != GL_NEAREST_MIPMAP_NEAREST &&
+		   param != GL_NEAREST_MIPMAP_LINEAR && param != GL_LINEAR_MIPMAP_NEAREST &&
+		   param != GL_LINEAR_MIPMAP_LINEAR) {
+			if (!c->error)
+				c->error = GL_INVALID_ENUM;
+			return;
+		}
+
+		//TODO mipmapping isn't actually supported, not sure it's worth trouble/perf hit
+		//just adding the enums to make porting easier
+		if (param == GL_NEAREST_MIPMAP_NEAREST || param == GL_NEAREST_MIPMAP_LINEAR)
+			param = GL_NEAREST;
+		if (param == GL_LINEAR_MIPMAP_NEAREST || param == GL_LINEAR_MIPMAP_LINEAR)
+			param = GL_LINEAR;
+
+		tex->min_filter = param;
+
+	} else if (pname == GL_TEXTURE_MAG_FILTER) {
+		if (param != GL_NEAREST && param != GL_LINEAR) {
+			if (!c->error)
+				c->error = GL_INVALID_ENUM;
+			return;
+		}
+		tex->mag_filter = param;
+	} else if (pname == GL_TEXTURE_WRAP_S) {
+		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
+			if (!c->error)
+				c->error = GL_INVALID_ENUM;
+			return;
+		}
+		tex->wrap_s = param;
+	} else if (pname == GL_TEXTURE_WRAP_T) {
+		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
+			if (!c->error)
+				c->error = GL_INVALID_ENUM;
+			return;
+		}
+		tex->wrap_t = param;
+	} else if (pname == GL_TEXTURE_WRAP_R) {
+		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
+			if (!c->error)
+				c->error = GL_INVALID_ENUM;
+			return;
+		}
+		tex->wrap_r = param;
+	}
+
 }
 
 void glTexParameteri(GLenum target, GLenum pname, GLint param)
@@ -9490,65 +10092,18 @@ void glTexParameteri(GLenum target, GLenum pname, GLint param)
 	//shift to range 0 - NUM_TEXTURES-1 to access bound_textures array
 	target -= GL_TEXTURE_UNBOUND + 1;
 
+	set_texparami(&c->textures.a[c->bound_textures[target]], pname, param);
+}
 
-//GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_COMPARE_FUNC, GL_TEXTURE_COMPARE_MODE, GL_TEXTURE_LOD_BIAS, GL_TEXTURE_MIN_FILTER,
-//GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD, GL_TEXTURE_MAX_LEVEL, GL_TEXTURE_SWIZZLE_R,
-//GL_TEXTURE_SWIZZLE_G, GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, or GL_TEXTURE_WRAP_R.
-	if (pname != GL_TEXTURE_MIN_FILTER && pname != GL_TEXTURE_MAG_FILTER &&
-	    pname != GL_TEXTURE_WRAP_S && pname != GL_TEXTURE_WRAP_T && pname != GL_TEXTURE_WRAP_R) {
-
+void glTextureParameteri(GLuint texture, GLenum pname, GLint param)
+{
+	if (texture >= c->textures.size) {
 		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+			c->error = GL_INVALID_OPERATION;
 		return;
 	}
 
-	if (pname == GL_TEXTURE_MIN_FILTER) {
-		if(param != GL_NEAREST && param != GL_LINEAR && param != GL_NEAREST_MIPMAP_NEAREST &&
-		   param != GL_NEAREST_MIPMAP_LINEAR && param != GL_LINEAR_MIPMAP_NEAREST &&
-		   param != GL_LINEAR_MIPMAP_LINEAR) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
-
-		//TODO mipmapping isn't actually supported, not sure it's worth trouble/perf hit
-		//just adding the enums to make porting easier
-		if (param == GL_NEAREST_MIPMAP_NEAREST || param == GL_NEAREST_MIPMAP_LINEAR)
-			param = GL_NEAREST;
-		if (param == GL_LINEAR_MIPMAP_NEAREST || param == GL_LINEAR_MIPMAP_LINEAR)
-			param = GL_LINEAR;
-
-		c->textures.a[c->bound_textures[target]].min_filter = param;
-
-	} else if (pname == GL_TEXTURE_MAG_FILTER) {
-		if(param != GL_NEAREST && param != GL_LINEAR) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
-		c->textures.a[c->bound_textures[target]].mag_filter = param;
-	} else if (pname == GL_TEXTURE_WRAP_S) {
-		if(param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
-		c->textures.a[c->bound_textures[target]].wrap_s = param;
-	} else if (pname == GL_TEXTURE_WRAP_T) {
-		if(param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
-		c->textures.a[c->bound_textures[target]].wrap_t = param;
-	} else if (pname == GL_TEXTURE_WRAP_R) {
-		if(param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
-		c->textures.a[c->bound_textures[target]].wrap_r = param;
-	}
+	set_texparami(&c->textures.a[texture], pname, param);
 }
 
 void glPixelStorei(GLenum pname, GLint param)
@@ -9572,22 +10127,6 @@ void glPixelStorei(GLenum pname, GLint param)
 	}
 
 }
-
-void glGenerateMipmap(GLenum target)
-{
-	if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_CUBE_MAP) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	//TODO not implemented, not sure it's worth it.  This stub is just to
-	//make porting real OpenGL programs easier.
-	//For example mipmap generation code see
-	//https://github.com/thebeast33/cro_lib/blob/master/cro_mipmap.h
-}
-
-
 
 void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
@@ -9629,14 +10168,14 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	free(c->textures.a[cur_tex].data);
 
 	//TODO support other internal formats? components should be of internalformat not format
-	if (!(c->textures.a[cur_tex].data = (u8*) malloc(width * components))) {
+	if (!(c->textures.a[cur_tex].data = (u8*)malloc(width * components))) {
 		if (!c->error)
 			c->error = GL_OUT_OF_MEMORY;
 		//undefined state now
 		return;
 	}
 
-	u32* texdata = (u32*) c->textures.a[cur_tex].data;
+	u32* texdata = (u32*)c->textures.a[cur_tex].data;
 
 	if (data)
 		memcpy(&texdata[0], data, width*sizeof(u32));
@@ -10004,9 +10543,9 @@ void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 	}
 }
 
-void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, GLsizei offset)
+void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer)
 {
-	if (index >= GL_MAX_VERTEX_ATTRIBS || size < 1 || size > 4 || (!c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER] && offset)) {
+	if (index >= GL_MAX_VERTEX_ATTRIBS || size < 1 || size > 4 || (!c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER] && pointer)) {
 		if (!c->error)
 			c->error = GL_INVALID_OPERATION;
 		return;
@@ -10028,7 +10567,7 @@ void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean norm
 	//TODO expand for other types etc.
 	v->stride = (stride) ? stride : size*sizeof(GLfloat);
 
-	v->offset = offset;
+	v->offset = (GLsizeiptr)pointer;
 	v->normalized = normalized;
 	// I put ARRAY_BUFFER-itself instead of 0 to reinforce that bound_buffers is indexed that way, buffer type - GL_ARRAY_BUFFER
 	v->buf = c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER]; //can be 0 if offset is 0/NULL
@@ -10069,7 +10608,7 @@ vec4 get_vertex_attrib_array(glVertex_Attrib* v, GLsizei i)
 	return tmpvec4;
 }
 
-
+//TODO(rswinkle): Why is first, an index, a GLint and not GLuint or GLsizei?
 void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
 	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
@@ -10088,6 +10627,26 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 		return;
 
 	run_pipeline(mode, first, count, 0, 0, GL_FALSE);
+}
+
+void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount)
+{
+	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (drawcount < 0) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+
+	for (GLsizei i=0; i<drawcount; i++) {
+		if (!count[i]) continue;
+		run_pipeline(mode, first[i], count[i], 0, 0, GL_FALSE);
+	}
 }
 
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, GLsizei offset)
@@ -10115,6 +10674,35 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, GLsizei offset)
 
 	c->buffers.a[c->vertex_arrays.a[c->cur_vertex_array].element_buffer].type = type;
 	run_pipeline(mode, offset, count, 0, 0, GL_TRUE);
+}
+
+void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, GLsizei* indices, GLsizei drawcount)
+{
+	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	if (drawcount < 0) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+	//error not in the spec but says type must be one of these ... strange
+	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
+		if (!c->error)
+			c->error = GL_INVALID_ENUM;
+		return;
+	}
+
+	// TODO I assume this belongs here since I have it in DrawElements
+	c->buffers.a[c->vertex_arrays.a[c->cur_vertex_array].element_buffer].type = type;
+
+	for (GLsizei i=0; i<drawcount; i++) {
+		if (!count[i]) continue;
+		run_pipeline(mode, indices[i], count[i], 0, 0, GL_TRUE);
+	}
 }
 
 void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount)
@@ -10507,6 +11095,19 @@ void glGetIntegerv(GLenum pname, GLint* params)
 		params[0] = c->poly_mode_front;
 		params[1] = c->poly_mode_back;
 		break;
+
+	// TODO decide if 3.2 is the best approixmation
+	case GL_MAJOR_VERSION:             params[0] = 3; break;
+	case GL_MINOR_VERSION:             params[0] = 2; break;
+
+	case GL_TEXTURE_BINDING_1D:        params[0] = c->bound_textures[GL_TEXTURE_1D-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_2D:        params[0] = c->bound_textures[GL_TEXTURE_2D-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_3D:        params[0] = c->bound_textures[GL_TEXTURE_3D-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_1D_ARRAY:  params[0] = c->bound_textures[GL_TEXTURE_1D_ARRAY-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_2D_ARRAY:  params[0] = c->bound_textures[GL_TEXTURE_2D_ARRAY-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_RECTANGLE: params[0] = c->bound_textures[GL_TEXTURE_RECTANGLE-GL_TEXTURE_UNBOUND-1]; break;
+	case GL_TEXTURE_BINDING_CUBE_MAP:  params[0] = c->bound_textures[GL_TEXTURE_CUBE_MAP-GL_TEXTURE_UNBOUND-1]; break;
+
 	default:
 		if (!c->error)
 			c->error = GL_INVALID_ENUM;
@@ -10585,6 +11186,15 @@ void glPolygonMode(GLenum face, GLenum mode)
 	}
 }
 
+void glLineWidth(GLfloat width)
+{
+	if (width <= 0.0f) {
+		if (!c->error)
+			c->error = GL_INVALID_VALUE;
+		return;
+	}
+	c->line_width = width;
+}
 
 void glPointSize(GLfloat size)
 {
@@ -10944,11 +11554,41 @@ void* glMapNamedBuffer(GLuint buffer, GLenum access)
 	return data;
 }
 
+
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
 
+void glGenerateMipmap(GLenum target)
+{
+	//TODO not implemented, not sure it's worth it.
+	//For example mipmap generation code see
+	//https://github.com/thebeast33/cro_lib/blob/master/cro_mipmap.h
+}
+
 void glGetDoublev(GLenum pname, GLdouble* params) { }
 void glGetInteger64v(GLenum pname, GLint64* params) { }
+
+// Framebuffers/Renderbuffers
+void glGenFramebuffers(GLsizei n, GLuint* ids) {}
+void glBindFramebuffer(GLenum target, GLuint framebuffer) {}
+void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers) {}
+void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level) {}
+void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
+void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
+void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer) {}
+GLboolean glIsFramebuffer(GLuint framebuffer) { return GL_FALSE; }
+
+void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {}
+void glBindRenderbuffer(GLenum target, GLuint renderbuffer) {}
+void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) {}
+void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height) {}
+GLboolean glIsRenderbuffer(GLuint renderbuffer) { return GL_FALSE; }
+
+void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) {}
+// Could also return GL_FRAMEBUFFER_UNDEFINED, but then I'd have to add all
+// those enums and really 0 signaling an error makes more sense
+GLenum glCheckFramebufferStatus(GLenum target) { return 0; }
+
 
 
 void glGetProgramiv(GLuint program, GLenum pname, GLint* params) { }
@@ -10971,10 +11611,10 @@ GLboolean glUnmapBuffer(GLenum target) { return GL_TRUE; }
 GLboolean glUnmapNamedBuffer(GLuint buffer) { return GL_TRUE; }
 
 // TODO
-void glLineWidth(GLfloat width) { }
 
 void glActiveTexture(GLenum texture) { }
 void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { }
+void glTextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params) { }
 
 void glUniform1f(GLint location, GLfloat v0) { }
 void glUniform2f(GLint location, GLfloat v0, GLfloat v1) { }
@@ -11909,11 +12549,10 @@ void put_pixel(Color color, int x, int y)
 	*dest = color.a << c->Ashift | color.r << c->Rshift | color.g << c->Gshift | color.b << c->Bshift;
 }
 
-//Should I have it take a glFramebuffer as paramater?
-void put_line(Color the_color, float x1, float y1, float x2, float y2)
+void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2)
 {
 	float tmp;
-	
+
 	//always draw from left to right
 	if (x2 < x1) {
 		tmp = x1;
@@ -11923,12 +12562,13 @@ void put_line(Color the_color, float x1, float y1, float x2, float y2)
 		y1 = y2;
 		y2 = tmp;
 	}
-	
+
 	//calculate slope and implicit line parameters once
 	float m = (y2-y1)/(x2-x1);
-	float A = y1 - y2;
-	float B = x2 - x1;
-	float C = x1*y2 -x2*y1;
+	Line line = make_Line(x1, y1, x2, y2);
+
+	vec2 ab = make_vec2(line.A, line.B);
+	normalize_vec2(&ab);
 
 	int x, y;
 
@@ -11936,38 +12576,222 @@ void put_line(Color the_color, float x1, float y1, float x2, float y2)
 	float x_max = MIN(c->back_buffer.w-1, MAX(x1, x2));
 	float y_min = MAX(0, MIN(y1, y2));
 	float y_max = MIN(c->back_buffer.h-1, MAX(y1, y2));
-	
+
 	//4 cases based on slope
-	if (m <= -1) {			//(-infinite, -1]
+	if (m <= -1) {           //(-infinite, -1]
 		x = x1;
 		for (y=y_max; y>=y_min; --y) {
-			put_pixel(the_color, x, y);
-			if (A*(x+0.5f) + B*(y-1) + C < 0)
+			for (float j=x-width/2; j<x+width/2; j++) {
+				put_pixel(the_color, j, y);
+			}
+			if (line_func(&line, x+0.5f, y-1) < 0)
 				x++;
 		}
-	} else if (m <= 0) {	//(-1, 0]
+	} else if (m <= 0) {     //(-1, 0]
 		y = y1;
 		for (x=x_min; x<=x_max; ++x) {
-			put_pixel(the_color, x, y);
-			if (A*(x+1) + B*(y-0.5f) + C > 0)
+			for (float j=y-width/2; j<y+width/2; j++) {
+				put_pixel(the_color, x, j);
+			}
+			if (line_func(&line, x+1, y-0.5f) > 0)
 				y--;
 		}
-	} else if (m <= 1) {	//(0, 1]
+	} else if (m <= 1) {     //(0, 1]
 		y = y1;
 		for (x=x_min; x<=x_max; ++x) {
-			put_pixel(the_color, x, y);
-			if (A*(x+1) + B*(y+0.5f) + C < 0)
+			for (float j=y-width/2; j<y+width/2; j++) {
+				put_pixel(the_color, x, j);
+			}
+
+			//put_pixel(the_color, x, y);
+			if (line_func(&line, x+1, y+0.5f) < 0)
 				y++;
 		}
-		
-	} else {				//(1, +infinite)
+
+	} else {                 //(1, +infinite)
 		x = x1;
 		for (y=y_min; y<=y_max; ++y) {
-			put_pixel(the_color, x, y);
-			if (A*(x+0.5f) + B*(y+1) + C > 0)
+			for (float j=x-width/2; j<x+width/2; j++) {
+				put_pixel(the_color, j, y);
+			}
+			if (line_func(&line, x+0.5f, y+1) > 0)
 				x++;
 		}
 	}
+}
+
+// TODO add variable width version?  Or programmable width, user function?
+void put_wide_line2(Color the_color, float width, float x1, float y1, float x2, float y2)
+{
+	if (width < 1.5f) {
+		put_line(the_color, x1, y1, x2, y2);
+		return;
+	}
+	float tmp;
+
+	//always draw from left to right
+	if (x2 < x1) {
+		tmp = x1;
+		x1 = x2;
+		x2 = tmp;
+		tmp = y1;
+		y1 = y2;
+		y2 = tmp;
+	}
+
+	//calculate slope and implicit line parameters once
+	float m = (y2-y1)/(x2-x1);
+	Line line = make_Line(x1, y1, x2, y2);
+
+	vec2 ab = make_vec2(line.A, line.B);
+	normalize_vec2(&ab);
+	ab = scale_vec2(ab, width/2.0f);
+
+	float x, y;
+
+	float x_min = MAX(0, x1);
+	float x_max = MIN(c->back_buffer.w-1, MAX(x1, x2));
+	float y_min = MAX(0, MIN(y1, y2));
+	float y_max = MIN(c->back_buffer.h-1, MAX(y1, y2));
+
+	// use pixel centers at 0.5f to match OpenGL line drawing
+	x_min += 0.5f;
+	x_max += 0.5f;
+	y_min += 0.5f;
+	y_max += 0.5f;
+
+	int diag;
+
+	//4 cases based on slope
+	if (m <= -1) {           //(-infinite, -1]
+		x = x1;
+		for (y=y_max; y>=y_min; --y) {
+			diag = put_line(the_color, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+0.5f, y-1) < 0) {
+				if (diag) {
+					put_line(the_color, x-ab.x, y-1-ab.y, x+ab.x, y-1+ab.y);
+				}
+				x++;
+			}
+		}
+	} else if (m <= 0) {     //(-1, 0]
+		y = y1;
+		for (x=x_min; x<=x_max; ++x) {
+			diag = put_line(the_color, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+1, y-0.5f) > 0) {
+				if (diag) {
+					put_line(the_color, x+1-ab.x, y-ab.y, x+1+ab.x, y+ab.y);
+				}
+				y--;
+			}
+		}
+	} else if (m <= 1) {     //(0, 1]
+		y = y1;
+		for (x=x_min; x<=x_max; ++x) {
+			diag = put_line(the_color, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+1, y+0.5f) < 0) {
+				if (diag) {
+					put_line(the_color, x+1-ab.x, y-ab.y, x+1+ab.x, y+ab.y);
+				}
+				y++;
+			}
+		}
+
+	} else {                 //(1, +infinite)
+		x = x1;
+		for (y=y_min; y<=y_max; ++y) {
+			diag = put_line(the_color, x-ab.x, y-ab.y, x+ab.x, y+ab.y);
+			if (line_func(&line, x+0.5f, y+1) > 0) {
+				if (diag) {
+					put_line(the_color, x-ab.x, y+1-ab.y, x+ab.x, y+1+ab.y);
+				}
+				x++;
+			}
+		}
+	}
+}
+
+//Should I have it take a glFramebuffer as paramater?
+int put_line(Color the_color, float x1, float y1, float x2, float y2)
+{
+	float tmp;
+
+	//always draw from left to right
+	if (x2 < x1) {
+		tmp = x1;
+		x1 = x2;
+		x2 = tmp;
+		tmp = y1;
+		y1 = y2;
+		y2 = tmp;
+	}
+
+	//calculate slope and implicit line parameters once
+	float m = (y2-y1)/(x2-x1);
+	Line line = make_Line(x1, y1, x2, y2);
+
+	int x, y;
+
+	float x_min = MAX(0, MIN(x1, x2));
+	float x_max = MIN(c->back_buffer.w-1, MAX(x1, x2));
+	float y_min = MAX(0, MIN(y1, y2));
+	float y_max = MIN(c->back_buffer.h-1, MAX(y1, y2));
+
+	int first_is_diag = GL_FALSE;
+
+	//4 cases based on slope
+	if (m <= -1) {           //(-infinite, -1]
+		x = x1;
+		put_pixel(the_color, x, y_max);
+		if (line_func(&line, x+0.5f, y-1) < 0) {
+			x++;
+			first_is_diag = GL_TRUE;
+		}
+		for (y=y_max-1; y>=y_min; --y) {
+			put_pixel(the_color, x, y);
+			if (line_func(&line, x+0.5f, y-1) < 0)
+				x++;
+		}
+	} else if (m <= 0) {     //(-1, 0]
+		y = y1;
+		put_pixel(the_color, x_min, y);
+		if (line_func(&line, x+1, y-0.5f) > 0) {
+			y--;
+			first_is_diag = GL_TRUE;
+		}
+		for (x=x_min+1; x<=x_max; ++x) {
+			put_pixel(the_color, x, y);
+			if (line_func(&line, x+1, y-0.5f) > 0)
+				y--;
+		}
+	} else if (m <= 1) {     //(0, 1]
+		y = y1;
+		put_pixel(the_color, x_min, y);
+		if (line_func(&line, x+1, y+0.5f) < 0) {
+			y++;
+			first_is_diag = GL_TRUE;
+		}
+		for (x=x_min+1; x<=x_max; ++x) {
+			put_pixel(the_color, x, y);
+			if (line_func(&line, x+1, y+0.5f) < 0)
+				y++;
+		}
+
+	} else {                 //(1, +infinite)
+		x = x1;
+		put_pixel(the_color, x, y_min);
+		if (line_func(&line, x+0.5f, y+1) > 0) {
+			x++;
+			first_is_diag = GL_TRUE;
+		}
+		for (y=y_min+1; y<=y_max; ++y) {
+			put_pixel(the_color, x, y);
+			if (line_func(&line, x+0.5f, y+1) > 0)
+				x++;
+		}
+	}
+
+	return first_is_diag;
 }
 
 void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
@@ -11977,7 +12801,7 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
 	float x_max = MAX(ceil(p1.x), ceil(p2.x));
 	float y_min = MIN(floor(p1.y), floor(p2.y));
 	float y_max = MAX(ceil(p1.y), ceil(p2.y));
-	
+
 	x_min = MIN(floor(p3.x), x_min);
 	x_max = MAX(ceil(p3.x),  x_max);
 	y_min = MIN(floor(p3.y), y_min);
@@ -11987,25 +12811,25 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
 	x_max = MIN(c->back_buffer.w-1, x_max);
 	y_min = MAX(0, y_min);
 	y_max = MIN(c->back_buffer.h-1, y_max);
-	
+
 	//form implicit lines
 	Line l12 = make_Line(p1.x, p1.y, p2.x, p2.y);
 	Line l23 = make_Line(p2.x, p2.y, p3.x, p3.y);
 	Line l31 = make_Line(p3.x, p3.y, p1.x, p1.y);
-	
+
 	float alpha, beta, gamma;
 	Color c;
 
 	float x, y;
 	//y += 0.5f; //center of pixel
-	
+
 	// TODO(rswinkle): floor(  + 0.5f) like draw_triangle?
 	for (y=y_min; y<=y_max; ++y) {
 		for (x=x_min; x<=x_max; ++x) {
 			gamma = line_func(&l12, x, y)/line_func(&l12, p3.x, p3.y);
 			beta = line_func(&l31, x, y)/line_func(&l31, p2.x, p2.y);
 			alpha = 1 - beta - gamma;
-			
+
 			if (alpha >= 0 && beta >= 0 && gamma >= 0)
 				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
 				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share

@@ -323,9 +323,9 @@ void draw_triangles_3d_ao(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 10, 0);
     glVertexAttribPointer(attrib->normal, 3, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 10, (sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 10, (void*)(sizeof(GLfloat) * 3));
     glVertexAttribPointer(attrib->uv, 4, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 10, (sizeof(GLfloat) * 6));
+        sizeof(GLfloat) * 10, (void*)(sizeof(GLfloat) * 6));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->normal);
@@ -340,7 +340,7 @@ void draw_triangles_3d_text(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 5, 0);
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 5, (sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 5, (void*)(sizeof(GLfloat) * 3));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->uv);
@@ -355,9 +355,9 @@ void draw_triangles_3d(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 3, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 8, 0);
     glVertexAttribPointer(attrib->normal, 3, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 8, (sizeof(GLfloat) * 3));
+        sizeof(GLfloat) * 8, (void*)(sizeof(GLfloat) * 3));
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 8, (sizeof(GLfloat) * 6));
+        sizeof(GLfloat) * 8, (void*)(sizeof(GLfloat) * 6));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->normal);
@@ -372,7 +372,7 @@ void draw_triangles_2d(Attrib *attrib, GLuint buffer, int count) {
     glVertexAttribPointer(attrib->position, 2, GL_FLOAT, GL_FALSE,
         sizeof(GLfloat) * 4, 0);
     glVertexAttribPointer(attrib->uv, 2, GL_FLOAT, GL_FALSE,
-        sizeof(GLfloat) * 4, (sizeof(GLfloat) * 2));
+        sizeof(GLfloat) * 4, (void*)(sizeof(GLfloat) * 2));
     glDrawArrays(GL_TRIANGLES, 0, count);
     glDisableVertexAttribArray(attrib->position);
     glDisableVertexAttribArray(attrib->uv);
@@ -1821,7 +1821,8 @@ void render_crosshairs(Attrib *attrib) {
     float matrix[16];
     set_matrix_2d(matrix, g->width, g->height);
     glUseProgram(attrib->program);
-    glLineWidth(4 * g->scale);
+    //glLineWidth(4 * g->scale);
+    glLineWidth(2 * g->scale);
     glEnable(GL_COLOR_LOGIC_OP);
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
