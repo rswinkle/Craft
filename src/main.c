@@ -3113,7 +3113,7 @@ int main(int argc, char **argv) {
     g->uniforms.sky_tex = sky_tex;
     g->uniforms.sign_tex = sign_tex;
 
-    program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_FALSE);
+    program = pglCreateProgram(block_vs, block_fs, 7, interpolation, GL_TRUE);
     glUseProgram(program);
     pglSetUniform(&g->uniforms);
     block_attrib.program = program;
@@ -3129,7 +3129,7 @@ int main(int argc, char **argv) {
     line_attrib.program = program;
     line_attrib.position = 0;
 
-    program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_FALSE);
+    program = pglCreateProgram(sky_vs, text_fs, 2, interpolation, GL_TRUE);
     glUseProgram(program);
     pglSetUniform(&g->uniforms);
     text_attrib.program = program;
