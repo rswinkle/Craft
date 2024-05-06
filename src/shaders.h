@@ -26,13 +26,13 @@ typedef struct My_Uniforms
 
 
 // Could/should just use the default shaders in PortableGL for lines
-void line_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
+void line_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
 void line_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms);
 
-void block_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
+void block_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
 void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms);
 
-void sky_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
+void sky_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
 void sky_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms);
 
 // text_vs is sky_vs

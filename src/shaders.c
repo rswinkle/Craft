@@ -3,9 +3,9 @@
 #include "shaders.h"
 
 // Could/should just use the default shaders in PortableGL for lines
-void line_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
+void line_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
-	builtins->gl_Position = mult_mat4_vec4(*((mat4*)uniforms), ((vec4*)vertex_attribs)[0]);
+	builtins->gl_Position = mult_mat4_vec4(*((mat4*)uniforms), vertex_attribs[0]);
 }
 
 void line_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
@@ -37,17 +37,16 @@ outgoing parameters: (varying == smooth)
 
 
 */
-void block_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
+void block_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
 	//convenience
-	vec4* v_attribs = vertex_attribs;
 	My_Uniforms* u = uniforms;
 
-	vec4 pos = v_attribs[0];
+	vec4 pos = vertex_attribs[0];
 	builtins->gl_Position = mult_mat4_vec4(u->matrix, pos);
 
 	// outputs, to assign to vs_output
-	vec4 uv = v_attribs[2];
+	vec4 uv = vertex_attribs[2];
 	vec2 fragment_uv = { uv.x, uv.y };
 	*(vec2*)vs_output = fragment_uv;
 
@@ -57,7 +56,7 @@ void block_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins,
 	vs_output[3] = fragment_light;
 
 	const vec3 light_direction = norm_vec3(make_vec3(-1.0, 1.0, -1.0));
-	vec3 normal = *(vec3*)&v_attribs[1];
+	vec3 normal = *(vec3*)&vertex_attribs[1];
 	float tmp = dot_vec3s(normal, light_direction);  // avoid macro duplication
 	float diffuse = MAX(0.0, tmp);
 	vs_output[6] = diffuse;
@@ -128,22 +127,21 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	vec3 sky_color = vec4_to_vec3(texture2D(u->sky_tex, u->timer, fog_height));
 
 	// TODO mix
-	color = mix_vec3s(color, sky_color, fog_factor);
+	color = mix_vec3(color, sky_color, fog_factor);
 	builtins->gl_FragColor = make_vec4(color.x, color.y, color.z, 1.0);
 }
 
 
 // TODO why have uv at 2 if we're not using normal at 1?
-void sky_vs(float* vs_output, void* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
+void sky_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
-	vec4* v_attribs = vertex_attribs;
 	My_Uniforms* u = uniforms;
 
 	//print_mat4(u->matrix, "\n");
-	//print_vec4(v_attribs[0], "\n");
-	builtins->gl_Position = mult_mat4_vec4(u->matrix, v_attribs[0]);
+	//print_vec4(vertex_attribs[0], "\n");
+	builtins->gl_Position = mult_mat4_vec4(u->matrix, vertex_attribs[0]);
 
-	vec2 fragment_uv = *(vec2*)&v_attribs[2];
+	vec2 fragment_uv = *(vec2*)&vertex_attribs[2];
 	*(vec2*)vs_output = fragment_uv;
 }
 

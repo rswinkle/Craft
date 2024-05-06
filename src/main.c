@@ -2805,7 +2805,7 @@ void create_window() {
 	g->width = WINDOW_WIDTH;
 	g->height = WINDOW_HEIGHT;
 	
-	g->window = SDL_CreateWindow("Craft", 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
+	g->window = SDL_CreateWindow("Craft", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
 	if (!g->window) {
 		printf("Failed to create window: %s\n", SDL_GetError());
 		SDL_Quit();
@@ -3105,7 +3105,7 @@ int main(int argc, char **argv) {
     // 10 just because
     GLenum interpolation[10];
     for (int i=0; i<10; ++i) {
-        interpolation[i] = SMOOTH;
+        interpolation[i] = PGL_SMOOTH;
     }
 
     g->uniforms.block_tex = block_tex;
