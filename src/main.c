@@ -1821,8 +1821,8 @@ void render_crosshairs(Attrib *attrib) {
     float matrix[16];
     set_matrix_2d(matrix, g->width, g->height);
     glUseProgram(attrib->program);
-    //glLineWidth(4 * g->scale);
-    glLineWidth(2 * g->scale);
+    glLineWidth(4 * g->scale);
+    //glLineWidth(2 * g->scale);
     glEnable(GL_COLOR_LOGIC_OP);
     //glUniformMatrix4fv(attrib->matrix, 1, GL_FALSE, matrix);
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
