@@ -1,6 +1,6 @@
 /*
 
-PortableGL 0.98.0 MIT licensed software renderer that closely mirrors OpenGL 3.x
+PortableGL 0.100.0 MIT licensed software renderer that closely mirrors OpenGL 3.x
 portablegl.com
 robertwinkler.com
 
@@ -48,17 +48,53 @@ QUICK NOTES:
     Internally, GL_RGBA is the only supported format, however other formats
     are converted automatically to RGBA unless PGL_DONT_CONVERT_TEXTURES is
     defined (in which case a format other than GL_RGBA is a GL_INVALID_ENUM
-    error). The argument internalFormat is ignored to ease porting.
+    error). The argument internalformat is ignored to ease porting.
 
     Only GL_TEXTURE_MAG_FILTER is actually used internally but you can set the
     MIN_FILTER for a texture. Mipmaps are not supported (GenerateMipMap is
     a stub and the level argument is ignored/assumed 0) and *MIPMAP* filter
     settings are silently converted to NEAREST or LINEAR.
 
-    8-bit per channel RGBA is the only supported format for the framebuffer.
-    You can specify the order using the masks in init_glContext. Technically
-    it'd be relatively trivial to add support for other formats but for now
-    we use a u32* to access the buffer.
+    The framebuffer format is a compile time setting which defaults
+    to 32-bit RGBA memory order, though PGL supports any 32 or 16 bit pixel format
+    as long as the appropriate macros are defined.
+    Several variants are predefined for easy use, named for the integer order
+    not the memory order:
+
+        PGL_RGBA32: RGBA memory order on MSB architecture
+        PGL_ABGR32: RGBA memory order on LSB architecture, default
+        PGL_ARGB32/PGL_BGRA32: Two other common 32-bit formats
+        PGL_RGB565/PGL_BGR565: Very common 16 bit formats
+        PGL_RGBA5551/PGL_ABGR1555: Less common 16 bit formats
+
+    Search PGL for those macros to see how to set up the controlling macros
+    for other formats; it's pretty self explanatory though I may try to improve
+    it in the future.
+
+    The depth and stencil buffer defaults to a combined buffer with the high
+    24 bits used for the depth value and the low 8 bits used for the stencil.
+    This format is called PGL_D24S8 internally. The only other format supported
+    is a 16 bit depth buffer and a separate 8-bit buffer for the stencil. This
+    is selected by defined PGL_D16 before including PGL.
+
+    If you define PGL_D16, you make also define PGL_NO_STENCIL to disable the
+    stencil buffer entirely to save a bit more memory.
+
+    TODO make depth optional
+
+    There are several predefined configuration depending on how much memory
+    you want to/can use that select settings for the framebuffer formats and
+    the vertex scratch space size:
+
+    PGL_TINY_MEM: RGB565, D16, NO_STENCIL, 4 vertex attribs, 80 KB scratch space
+    PGL_SMALL_MEM: Same as TINY but 800 KB scratch space
+    PGL_MED_MEM: RGB565, 4 vertex attribs, 1.6 MB scratch space
+    default: ABGR32, D24S8, 8 vertex attribs, 16 MB scratch space
+
+    Obviously most of the time the default is fine, and if none of the
+    presets match what you want you can mix and match and adjust any of
+    the finer grained options individually, but don't define a preset *and*
+    define individual settings as that will cause problems.
 
 
 DOCUMENTATION
@@ -80,10 +116,10 @@ as needed:
         vec4 v_color;
     } My_Uniforms;
 
-    u32* backbuf = NULL;
+    pix_t* backbuf = NULL;
     glContext the_context;
 
-    if (!init_glContext(&the_context, &backbuf, WIDTH, HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
+    if (!init_glContext(&the_context, &backbuf, WIDTH, HEIGHT)) {
         puts("Failed to initialize glContext");
         exit(0);
     }
@@ -103,8 +139,8 @@ as needed:
     GLuint myshader = pglCreateProgram(smooth_vs, smooth_fs, 4, interpolation, GL_FALSE);
     glUseProgram(myshader);
 
-    // Red is not actually used since we're using per vert color
-    My_Uniform the_uniforms = { IDENTITY_MAT4(), Red };
+    // v_color is not actually used since we're using per vert color
+    My_Uniform the_uniforms = { IDENTITY_MAT4() };
     pglSetUniform(&the_uniforms);
 
     // Your standard OpenGL buffer setup etc. here
@@ -156,6 +192,15 @@ as needed:
         frag_color = vary_color;
     }
 
+    //You might also want to resize the framebuffer if your window is resizable
+    //instead of just letting your GUI system scale the output in which case when
+    //you handle a resize event you would do something like this:
+
+    pglResizeFramebuffer(new_width, new_height);
+    backbuf = (pix_t*)pglGetBackBuffer();
+    glViewport(0, 0, width, height);
+    // anything else you need for your particular GUI/windowing system here
+
 That's basically it.  There are some other non-standard features like
 pglSetInterp that lets you change the interpolation of a shader
 whenever you want.  In real OpenGL you'd have to have 2 (or more) separate
@@ -166,7 +211,17 @@ ADDITIONAL CONFIGURATION
 ========================
 
 We've already mentioned several configuration macros above but here are
-all of them:
+all of the non-framebuffer/memory related ones:
+
+PGL_UNSAFE
+    This replaces the old portablegl_unsafe.h
+    It turns off all error checking and debug message/logging the same way
+    NDEBUG turns off assert(). By default PGL is a GL_DEBUG_CONTEXT with
+    GL_DEBUG_OUTPUT on and a default callback function printing to stdout.
+    You can use Enable/Disable and DebugMessageCallback to turn it on/off
+    or use your own callback function like normal. However with PGL_UNSAFE
+    defined, there's nothing compiled in at all so I would only use it
+    when you're pushing for every ounce of perf.
 
 PGL_PREFIX_TYPES
     This prefixes the standard glsl types (and a couple other internal types)
@@ -192,7 +247,7 @@ PGL_PREFIX_GLSL or PGL_SUFFIX_GLSL
     Instead, using one of these two macros you can change the handful of
     functions that are likely to cause a conflict with an external
     math library like glm (with a using declaration/directive of course).
-    So mix() would become either pgl_mix() or mixf(). So far it is less than
+    So smoothstep() would become either pgl_smoothstep() or smoothstepf(). So far it is less than
     10 functions that are modified but feel free to add more.
 
 PGL_HERMITE_SMOOTHING
@@ -201,34 +256,49 @@ PGL_HERMITE_SMOOTHING
     look smoother so it's worth trying if you're curious. Note, most
     implementations do not use it.
 
-PGL_SIMPLE_THICK_LINES
-    If defined, use a simpler (and less correct) thick line drawing algorithm.
-    It is (currently) about 17-18% faster than the default algorithm. It draws
-    lines that have LineWidth pixels along the x or y axis (whichever is
-    closest to perpendicular) but this makes the line thinner than it should
-    be the more diagonal the line. The ends also look wrong. Despite this,
-    many implementations use this (or a similar) algorithm but cap the
-    thickness at a relatively low number (like 8) so the problems are less
-    obvious.
+PGL_BETTER_THICK_LINES
+    If defined, use a more mathematically correct thick line drawing algorithm
+    than the one in the official OpenGL spec.  It is about 15-17% slower but
+    has the correct width. The default draws exactly width pixels in the
+    minor axis, which results in only horizontal and vertical lines being
+    correct. It also means the ends are not perpendicular to the line which
+    looks worse the thicker the line.  The better algorithm is about what is
+    specified for GL_LINE_SMOOTH/AA lines except without the actual
+    anti-aliasing (ie no changes to the alpha channel).
 
-There are also these predefined maximums which you can change.
-However, considering the performance limitations of PortableGL, they are
-probably more than enough.
+PGL_DISABLE_COLOR_MASK
+    If defined, color masking (which is set using glColorMask()) is ignored
+    which provides some performance benefit though it varies depending on
+    what you're doing.
 
-MAX_DRAW_BUFFERS and MAX_COLOR_ATTACHMENTS aren't used since those features aren't implemented.
+PGL_EXCLUDE_STUBS
+    If defined, PGL will exclude stubs for dozens of OpenGL functions that
+    make porting existing OpenGL projects and reusing existing OpenGL
+    helper/library code with PortableGL much easier.  This might make
+    sense to define if you're starting a PGL project from scratch.
+
+There are also several predefined maximums which you can change.
+However, considering the performance limitations of PortableGL, the defaults
+are probably more than enough, and in fact you might want to decrease PGL_MAX_VERTICES
+and GL_MAX_VERTEX_ATTRIBS to save memory, see PGL memory presets in QUICK_NOTES above.
+
+MAX_DRAW_BUFFERS, MAX_COLOR_ATTACHMENTS aren't used since those features aren't implemented.
 PGL_MAX_VERTICES refers to the number of output vertices of a single draw call.
-It's mostly there as a sanity check, not a real limitation.
 
-#define PGL_MAX_VERTICES 500000
 #define GL_MAX_VERTEX_ATTRIBS 8
 #define GL_MAX_VERTEX_OUTPUT_COMPONENTS (4*GL_MAX_VERTEX_ATTRIBS)
 #define GL_MAX_DRAW_BUFFERS 4
 #define GL_MAX_COLOR_ATTACHMENTS 4
 
+#define PGL_MAX_VERTICES 500000
+#define PGL_MAX_ALIASED_WIDTH 2048.0f
+#define PGL_MAX_TEXTURE_SIZE 16384
+#define PGL_MAX_3D_TEXTURE_SIZE 8192
+#define PGL_MAX_ARRAY_TEXTURE_LAYERS 8192
 
 MIT License
-Copyright (c) 2011-2024 Robert Winkler
-Copyright (c) 1997-2024 Fabrice Bellard (clipping code from TinyGL)
+Copyright (c) 2011-2025 Robert Winkler
+Copyright (c) 1997-2025 Fabrice Bellard (clipping code from TinyGL)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation
@@ -250,15 +320,15 @@ IN THE SOFTWARE.
 #define vec2 pgl_vec2
 #define vec3 pgl_vec3
 #define vec4 pgl_vec4
-#define dvec2 pgl_dvec2
-#define dvec3 pgl_dvec3
-#define dvec4 pgl_dvec4
 #define ivec2 pgl_ivec2
 #define ivec3 pgl_ivec3
 #define ivec4 pgl_ivec4
 #define uvec2 pgl_uvec2
 #define uvec3 pgl_uvec3
 #define uvec4 pgl_uvec4
+#define bvec2 pgl_bvec2
+#define bvec3 pgl_bvec3
+#define bvec4 pgl_bvec4
 #define mat2 pgl_mat2
 #define mat3 pgl_mat3
 #define mat4 pgl_mat4
@@ -268,13 +338,15 @@ IN THE SOFTWARE.
 #endif
 
 
+// I really need to think about these
+// Maybe suffixes should just be the default since I already give many glsl
+// functions suffixes but then we still have the problem if I ever want
+// to support doubles with no suffix like C math funcs..
+
 // Add/remove as needed as long as you also modify
-// matching undef section
+// matching undef section in close_pgl.h
 
 #ifdef PGL_PREFIX_GLSL
-#define mix pgl_mix
-#define radians pgl_radians
-#define degrees pgl_degrees
 #define smoothstep pgl_smoothstep
 #define clamp_01 pgl_clamp_01
 #define clamp pgl_clamp
@@ -282,9 +354,6 @@ IN THE SOFTWARE.
 
 #elif defined(PGL_SUFFIX_GLSL)
 
-#define mix mixf
-#define radians radiansf
-#define degrees degreesf
 #define smoothstep smoothstepf
 #define clamp_01 clampf_01
 #define clamp clampf
@@ -301,13 +370,22 @@ extern "C" {
 #endif
 
 
+#ifndef PGLDEF
+#ifdef PGL_STATIC
+#define PGLDEF static
+#else
+#define PGLDEF extern
+#endif
+#endif
 
 #ifndef PGL_ASSERT
 #include <assert.h>
 #define PGL_ASSERT(x) assert(x)
 #endif
 
+#ifndef CVEC_ASSERT
 #define CVEC_ASSERT(x) PGL_ASSERT(x)
+#endif
 
 #if defined(PGL_MALLOC) && defined(PGL_FREE) && defined(PGL_REALLOC)
 /* ok */
@@ -321,11 +399,11 @@ extern "C" {
 #define PGL_MALLOC(sz)      malloc(sz)
 #define PGL_REALLOC(p, sz)  realloc(p, sz)
 #define PGL_FREE(p)         free(p)
-#else
+#endif
+
 #define CVEC_MALLOC(sz) PGL_MALLOC(sz)
 #define CVEC_REALLOC(p, sz) PGL_REALLOC(p, sz)
 #define CVEC_FREE(p) PGL_FREE(p)
-#endif
 
 #ifndef PGL_MEMMOVE
 #include <string.h>
@@ -334,10 +412,259 @@ extern "C" {
 #define CVEC_MEMMOVE(dst, src, sz) PGL_MEMMOVE(dst, src, sz)
 #endif
 
-#ifndef PGL_SIMPLE_THICK_LINES
-#define DRAW_THICK_LINE draw_thick_line
+// Get rid of signed/unsigned comparison warnings when looping through vectors
+#ifndef CVEC_SIZE_T
+#define CVEC_SIZE_T i64
+#endif
+
+
+// Feel free to change these presets
+// Do not use one of these combined with individual settings; you can cause problems
+// if multiple selections within the same category are defined
+#ifdef PGL_TINY_MEM
+// framebuffer mem use = 4*w*h
+#define PGL_RGB565
+#define PGL_D16
+#define PGL_NO_STENCIL
+#elif defined(PGL_SMALL_MEM)
+// 4*w*h
+#define PGL_RGB565
+#define PGL_D16
+#define PGL_NO_STENCIL
+#elif defined(PGL_MED_MEM)
+// 6*w*h
+#define PGL_RGB565
 #else
-#define DRAW_THICK_LINE draw_thick_line_simple
+// 8*w*h
+// defining this just for users convenience to detect different builds
+// though if you manually select smaller framebuffers this becomes confusing
+#define PGL_NORMAL_MEM
+// pixel format default to PGL_ABGR32 set below if no other defined
+#endif
+
+
+
+#if defined(PGL_AMASK) && defined(PGL_BMASK) && defined(PGL_GMASK) && defined(PGL_BMASK) && \
+    defined(PGL_ASHIFT) && defined(PGL_BSHIFT) && defined(PGL_GSHIFT) && defined(PGL_BSHIFT) && \
+    defined(PGL_RMAX) && defined(PGL_GMAX) && defined(PGL_BMAX) && defined(PGL_AMAX) && defined(PGL_BITDEPTH)
+/* ok */
+#elif !defined(PGL_AMASK) && !defined(PGL_BMASK) && !defined(PGL_GMASK) && !defined(PGL_BMASK) && \
+    !defined(PGL_ASHIFT) && !defined(PGL_BSHIFT) && !defined(PGL_GSHIFT) && !defined(PGL_BSHIFT) && \
+    !defined(PGL_RMAX) && !defined(PGL_GMAX) && !defined(PGL_BMAX) && !defined(PGL_AMAX) && !defined(PGL_BITDEPTH)
+/* ok */
+#else
+#error "Must define all PGL_(RGBA)MASK, PGL_(RGBA)SHIFT, PGL_(RGBA)MAX, and PGL_BITDEPTH or none (which will give default PGL_AGBR32 format)"
+#endif
+
+// TODO more 32-bit formats
+#ifdef PGL_RGBA32
+ #define PGL_RMASK 0xFF000000
+ #define PGL_GMASK 0x00FF0000
+ #define PGL_BMASK 0x0000FF00
+ #define PGL_AMASK 0x000000FF
+ #define PGL_RSHIFT 24
+ #define PGL_GSHIFT 16
+ #define PGL_BSHIFT 8
+ #define PGL_ASHIFT 0
+ #define PGL_RMAX 255
+ #define PGL_GMAX 255
+ #define PGL_BMAX 255
+ #define PGL_AMAX 255
+ #define PGL_BITDEPTH 32
+ #define PGL_PIX_STR "RGBA32"
+#elif defined(PGL_ARGB32)
+ #define PGL_AMASK 0xFF000000
+ #define PGL_RMASK 0x00FF0000
+ #define PGL_GMASK 0x0000FF00
+ #define PGL_BMASK 0x000000FF
+ #define PGL_ASHIFT 24
+ #define PGL_RSHIFT 16
+ #define PGL_GSHIFT 8
+ #define PGL_BSHIFT 0
+ #define PGL_RMAX 255
+ #define PGL_GMAX 255
+ #define PGL_BMAX 255
+ #define PGL_AMAX 255
+ #define PGL_BITDEPTH 32
+ #define PGL_PIX_STR "ARGB32"
+#elif defined(PGL_BGRA32)
+ #define PGL_BMASK 0xFF000000
+ #define PGL_GMASK 0x00FF0000
+ #define PGL_RMASK 0x0000FF00
+ #define PGL_AMASK 0x000000FF
+ #define PGL_BSHIFT 24
+ #define PGL_GSHIFT 16
+ #define PGL_RSHIFT 8
+ #define PGL_ASHIFT 0
+ #define PGL_RMAX 255
+ #define PGL_GMAX 255
+ #define PGL_BMAX 255
+ #define PGL_AMAX 255
+ #define PGL_BITDEPTH 32
+ #define PGL_PIX_STR "BGRA32"
+#elif defined(PGL_RGB565)
+ #define PGL_RMASK 0xF800
+ #define PGL_GMASK 0x07E0
+ #define PGL_BMASK 0x001F
+ #define PGL_AMASK 0x0000
+ #define PGL_RSHIFT 11
+ #define PGL_GSHIFT 5
+ #define PGL_BSHIFT 0
+ #define PGL_ASHIFT 0
+ #define PGL_RMAX 31
+ #define PGL_GMAX 63
+ #define PGL_BMAX 31
+ #define PGL_AMAX 0
+ #define PGL_BITDEPTH 16
+ #define PGL_PIX_STR "RGB565"
+#elif defined(PGL_BGR565)
+ #define PGL_BMASK 0xF800
+ #define PGL_GMASK 0x07E0
+ #define PGL_RMASK 0x001F
+ #define PGL_AMASK 0x0000
+ #define PGL_BSHIFT 11
+ #define PGL_GSHIFT 5
+ #define PGL_RSHIFT 0
+ #define PGL_ASHIFT 0
+ #define PGL_RMAX 31
+ #define PGL_GMAX 63
+ #define PGL_BMAX 31
+ #define PGL_AMAX 0
+ #define PGL_BITDEPTH 16
+ #define PGL_PIX_STR "BGR565"
+#elif defined(PGL_RGBA5551)
+ #define PGL_RMASK 0xF800
+ #define PGL_GMASK 0x07C0
+ #define PGL_BMASK 0x003E
+ #define PGL_AMASK 0x0001
+ #define PGL_RSHIFT 11
+ #define PGL_GSHIFT 6
+ #define PGL_BSHIFT 1
+ #define PGL_ASHIFT 0
+ #define PGL_RMAX 31
+ #define PGL_GMAX 31
+ #define PGL_BMAX 31
+ #define PGL_AMAX 1
+ #define PGL_BITDEPTH 16
+ #define PGL_PIX_STR "RGBA5551"
+#elif defined(PGL_ABGR1555)
+ #define PGL_AMASK 0x8000
+ #define PGL_BMASK 0x7C00
+ #define PGL_GMASK 0x03E0
+ #define PGL_RMASK 0x001F
+ #define PGL_ASHIFT 15
+ #define PGL_BSHIFT 10
+ #define PGL_GSHIFT 5
+ #define PGL_RSHIFT 0
+ #define PGL_RMAX 31
+ #define PGL_GMAX 31
+ #define PGL_BMAX 31
+ #define PGL_AMAX 1
+ #define PGL_BITDEPTH 16
+ #define PGL_PIX_STR "ABGR1555"
+#else
+ // default to PGL_ABGR32 for RGBA memory order on LSB
+ #define PGL_ABGR32
+ #define PGL_AMASK 0xFF000000
+ #define PGL_BMASK 0x00FF0000
+ #define PGL_GMASK 0x0000FF00
+ #define PGL_RMASK 0x000000FF
+ #define PGL_ASHIFT 24
+ #define PGL_BSHIFT 16
+ #define PGL_GSHIFT 8
+ #define PGL_RSHIFT 0
+ #define PGL_RMAX 255
+ #define PGL_GMAX 255
+ #define PGL_BMAX 255
+ #define PGL_AMAX 255
+ #define PGL_BITDEPTH 32
+ #define PGL_PIX_STR "ABGR32"
+#endif
+
+
+// for now all 32 bit pixel types are 8888, no weird 10,10,10,2
+#if PGL_BITDEPTH == 32
+ #define RGBA_TO_PIXEL(r,g,b,a) ((u32)(a) << PGL_ASHIFT | (u32)(r) << PGL_RSHIFT | (u32)(g) << PGL_GSHIFT | (u32)(b) << PGL_BSHIFT)
+ #define PIXEL_TO_COLOR(p) make_Color(((p) & PGL_RMASK) >> PGL_RSHIFT, ((p) & PGL_GMASK) >> PGL_GSHIFT, ((p) & PGL_BMASK) >> PGL_BSHIFT, ((p) & PGL_AMASK) >> PGL_ASHIFT)
+ #define pix_t u32
+ #define COLOR_TO_VEC4(c) Color_to_vec4(c)
+ #define VEC4_TO_COLOR(v) vec4_to_Color(v)
+#elif PGL_BITDEPTH == 16
+ #if PGL_AMASK == 0
+  #define RGBA_TO_PIXEL(r,g,b,a) ((int)(r) << PGL_RSHIFT | (int)(g) << PGL_GSHIFT | (int)(b) << PGL_BSHIFT)
+  #define PIXEL_TO_COLOR(p) make_Color(((p) & PGL_RMASK) >> PGL_RSHIFT, ((p) & PGL_GMASK) >> PGL_GSHIFT, ((p) & PGL_BMASK) >> PGL_BSHIFT, 255)
+ #else
+  #define RGBA_TO_PIXEL(r,g,b,a) ((int)(a) << PGL_ASHIFT | (int)(r) << PGL_RSHIFT | (int)(g) << PGL_GSHIFT | (int)(b) << PGL_BSHIFT)
+  #define PIXEL_TO_COLOR(p) make_Color(((p) & PGL_RMASK) >> PGL_RSHIFT, ((p) & PGL_GMASK) >> PGL_GSHIFT, ((p) & PGL_BMASK) >> PGL_BSHIFT, ((p) & PGL_AMASK) >> PGL_ASHIFT)
+ #endif
+
+ #define pix_t u16
+ #define PIXEL_TO_VEC4(p) make_vec4((((p) & PGL_RMASK) >> PGL_RSHIFT)/(float)PGL_RMAX, (((p) & PGL_GMASK) >> PGL_GSHIFT)/(float)PGL_GMAX, (((p) & PGL_BMASK) >> PGL_BSHIFT)/(float)PGL_BMAX, (((p) & PGL_AMASK) >> PGL_ASHIFT)/(float)PGL_AMAX)
+
+ #define COLOR_TO_VEC4(c) make_vec4((c).r/(float)PGL_RMAX, (c).g/(float)PGL_GMAX, (c).b/(float)PGL_BMAX, (c).a/(float)PGL_AMAX)
+ #define VEC4_TO_COLOR(v) make_Color(v.x*PGL_RMAX, v.y*PGL_GMAX, v.z*PGL_BMAX, v.w*PGL_AMAX)
+#endif
+
+
+// TODO these are messy. It makes the code cleaner but I should try to simplify
+// these some more. It's the different needs of glClear() vs fragment_processing()
+// combined with the different formats that makes it a headache.
+#ifdef PGL_D16
+ #define PGL_MAX_Z 0xFFFF
+ #define PGL_ZSHIFT 0
+ #define GET_ZPIX(i) ((u16*)c->zbuf.lastrow)[(i)]
+ #define GET_ZPIX_TOP(i) ((u16*)c->zbuf.buf)[(i)]
+ #define GET_Z(i) GET_ZPIX(i)
+ #define SET_Z_PRESHIFTED(i, v) GET_ZPIX(i) = (v)
+ #define SET_Z_PRESHIFTED_TOP(i, v) GET_ZPIX_TOP(i) = (v)
+ #define SET_Z(i, orig_zpix, v) GET_ZPIX(i) = (v)
+
+ #define stencil_pix_t u8
+ #define GET_STENCIL_PIX(i) c->stencil_buf.lastrow[(i)]
+ #define GET_STENCIL_PIX_TOP(i) c->stencil_buf.buf[(i)]
+ #define EXTRACT_STENCIL(stencil_pix) (stencil_pix)
+ #define GET_STENCIL(i) GET_STENCIL_PIX(i)
+ #define GET_STENCIL_TOP(i) GET_STENCIL_PIX_TOP(i)
+ #define SET_STENCIL(i, v) GET_STENCIL_PIX(i) = (v)
+ #define SET_STENCIL_TOP(i, v) GET_STENCIL_PIX_TOP(i) = (v)
+#else
+ // TODO not suported yet
+ #ifdef PGL_NO_STENCIL
+ #error "PGL_NO_STENCIL is incompatible with PGL_D24S8 format, use with PGL_D16"
+ #endif
+
+ #define PGL_D24S8 1
+ #define PGL_MAX_Z 0xFFFFFF
+ // could use GL_STENCIL_BITS..?
+ #define PGL_ZSHIFT 8
+
+ #define GET_ZPIX(i) ((u32*)c->zbuf.lastrow)[(i)]
+ #define GET_ZPIX_TOP(i) ((u32*)c->zbuf.buf)[(i)]
+ #define GET_Z(i) (GET_ZPIX(i) >> PGL_ZSHIFT)
+ #define SET_Z_PRESHIFTED(i, v) \
+     GET_ZPIX(i) &= PGL_STENCIL_MASK; \
+     GET_ZPIX(i) |= (v)
+
+ #define SET_Z_PRESHIFTED_TOP(i, v) \
+     GET_ZPIX_TOP(i) &= PGL_STENCIL_MASK; \
+     GET_ZPIX_TOP(i) |= (v)
+
+ #define SET_Z(i, orig_zpix, v) \
+     GET_ZPIX(i) = ((orig_zpix) & PGL_STENCIL_MASK) | ((v) << PGL_ZSHIFT);
+
+ #define stencil_pix_t u32
+ #define GET_STENCIL_PIX(i) ((stencil_pix_t*)c->stencil_buf.lastrow)[(i)]
+ #define GET_STENCIL_PIX_TOP(i) ((stencil_pix_t*)c->stencil_buf.buf)[(i)]
+ #define EXTRACT_STENCIL(stencil_pix) ((stencil_pix) & PGL_STENCIL_MASK)
+ #define GET_STENCIL(i) (GET_STENCIL_PIX(i) & PGL_STENCIL_MASK)
+ #define GET_STENCIL_TOP(i) (GET_STENCIL_PIX_TOP(i) & PGL_STENCIL_MASK)
+ #define SET_STENCIL(i, v) \
+     GET_STENCIL_PIX(i) &= ~PGL_STENCIL_MASK; \
+     GET_STENCIL_PIX(i) |= (v)
+
+ #define SET_STENCIL_TOP(i, v) \
+     GET_STENCIL_PIX_TOP(i) &= ~PGL_STENCIL_MASK; \
+     GET_STENCIL_PIX_TOP(i) |= (v)
 #endif
 
 #ifndef CRSW_MATH_H
@@ -388,32 +715,120 @@ typedef int16_t  i16;
 typedef int32_t  i32;
 typedef int64_t  i64;
 
-// returns float [0,1)
-inline float rsw_randf()
-{
-	return rand() / (RAND_MAX + 1.0f);
-}
-
-inline float rsw_randf_range(float min, float max)
-{
-	return min + (max-min) * rsw_randf();
-}
-
-inline double rsw_map(double x, double a, double b, double c, double d)
-{
-	return (x-a)/(b-a) * (d-c) + c;
-}
-
-inline float rsw_mapf(float x, float a, float b, float c, float d)
-{
-	return (x-a)/(b-a) * (d-c) + c;
-}
 
 typedef struct vec2
 {
 	float x;
 	float y;
 } vec2;
+
+#define SET_VEC2(v, _x, _y) \
+	do {\
+	(v).x = _x;\
+	(v).y = _y;\
+	} while (0)
+
+inline vec2 make_vec2(float x, float y)
+{
+	vec2 v = { x, y };
+	return v;
+}
+
+inline vec2 negate_vec2(vec2 v)
+{
+	vec2 r = { -v.x, -v.y };
+	return r;
+}
+
+inline void fprint_vec2(FILE* f, vec2 v, const char* append)
+{
+	fprintf(f, "(%f, %f)%s", v.x, v.y, append);
+}
+
+inline void print_vec2(vec2 v, const char* append)
+{
+	printf("(%f, %f)%s", v.x, v.y, append);
+}
+
+inline int fread_vec2(FILE* f, vec2* v)
+{
+	int tmp = fscanf(f, " (%f, %f)", &v->x, &v->y);
+	return (tmp == 2);
+}
+
+inline float length_vec2(vec2 a)
+{
+	return sqrt(a.x * a.x + a.y * a.y);
+}
+
+inline vec2 norm_vec2(vec2 a)
+{
+	float l = length_vec2(a);
+	vec2 c = { a.x/l, a.y/l };
+	return c;
+}
+
+inline void normalize_vec2(vec2* a)
+{
+	float l = length_vec2(*a);
+	a->x /= l;
+	a->y /= l;
+}
+
+inline vec2 add_vec2s(vec2 a, vec2 b)
+{
+	vec2 c = { a.x + b.x, a.y + b.y };
+	return c;
+}
+
+inline vec2 sub_vec2s(vec2 a, vec2 b)
+{
+	vec2 c = { a.x - b.x, a.y - b.y };
+	return c;
+}
+
+inline vec2 mult_vec2s(vec2 a, vec2 b)
+{
+	vec2 c = { a.x * b.x, a.y * b.y };
+	return c;
+}
+
+inline vec2 div_vec2s(vec2 a, vec2 b)
+{
+	vec2 c = { a.x / b.x, a.y / b.y };
+	return c;
+}
+
+inline float dot_vec2s(vec2 a, vec2 b)
+{
+	return a.x*b.x + a.y*b.y;
+}
+
+inline vec2 scale_vec2(vec2 a, float s)
+{
+	vec2 b = { a.x * s, a.y * s };
+	return b;
+}
+
+inline int equal_vec2s(vec2 a, vec2 b)
+{
+	return (a.x == b.x && a.y == b.y);
+}
+
+inline int equal_epsilon_vec2s(vec2 a, vec2 b, float epsilon)
+{
+	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon);
+}
+
+inline float cross_vec2s(vec2 a, vec2 b)
+{
+	return a.x * b.y - a.y * b.x;
+}
+
+inline float angle_vec2s(vec2 a, vec2 b)
+{
+	return acos(dot_vec2s(a, b) / (length_vec2(a) * length_vec2(b)));
+}
 
 
 typedef struct vec3
@@ -422,6 +837,121 @@ typedef struct vec3
 	float y;
 	float z;
 } vec3;
+
+#define SET_VEC3(v, _x, _y, _z) \
+	do {\
+	(v).x = _x;\
+	(v).y = _y;\
+	(v).z = _z;\
+	} while (0)
+
+inline vec3 make_vec3(float x, float y, float z)
+{
+	vec3 v = { x, y, z };
+	return v;
+}
+
+inline vec3 negate_vec3(vec3 v)
+{
+	vec3 r = { -v.x, -v.y, -v.z };
+	return r;
+}
+
+inline void fprint_vec3(FILE* f, vec3 v, const char* append)
+{
+	fprintf(f, "(%f, %f, %f)%s", v.x, v.y, v.z, append);
+}
+
+inline void print_vec3(vec3 v, const char* append)
+{
+	printf("(%f, %f, %f)%s", v.x, v.y, v.z, append);
+}
+
+inline int fread_vec3(FILE* f, vec3* v)
+{
+	int tmp = fscanf(f, " (%f, %f, %f)", &v->x, &v->y, &v->z);
+	return (tmp == 3);
+}
+
+inline float length_vec3(vec3 a)
+{
+	return sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+}
+
+inline vec3 norm_vec3(vec3 a)
+{
+	float l = length_vec3(a);
+	vec3 c = { a.x/l, a.y/l, a.z/l };
+	return c;
+}
+
+inline void normalize_vec3(vec3* a)
+{
+	float l = length_vec3(*a);
+	a->x /= l;
+	a->y /= l;
+	a->z /= l;
+}
+
+inline vec3 add_vec3s(vec3 a, vec3 b)
+{
+	vec3 c = { a.x + b.x, a.y + b.y, a.z + b.z };
+	return c;
+}
+
+inline vec3 sub_vec3s(vec3 a, vec3 b)
+{
+	vec3 c = { a.x - b.x, a.y - b.y, a.z - b.z };
+	return c;
+}
+
+inline vec3 mult_vec3s(vec3 a, vec3 b)
+{
+	vec3 c = { a.x * b.x, a.y * b.y, a.z * b.z };
+	return c;
+}
+
+inline vec3 div_vec3s(vec3 a, vec3 b)
+{
+	vec3 c = { a.x / b.x, a.y / b.y, a.z / b.z };
+	return c;
+}
+
+inline float dot_vec3s(vec3 a, vec3 b)
+{
+	return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline vec3 scale_vec3(vec3 a, float s)
+{
+	vec3 b = { a.x * s, a.y * s, a.z * s };
+	return b;
+}
+
+inline int equal_vec3s(vec3 a, vec3 b)
+{
+	return (a.x == b.x && a.y == b.y && a.z == b.z);
+}
+
+inline int equal_epsilon_vec3s(vec3 a, vec3 b, float epsilon)
+{
+	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon &&
+			fabs(a.z - b.z) < epsilon);
+}
+
+inline vec3 cross_vec3s(const vec3 u, const vec3 v)
+{
+	vec3 result;
+	result.x = u.y*v.z - v.y*u.z;
+	result.y = -u.x*v.z + v.x*u.z;
+	result.z = u.x*v.y - v.x*u.y;
+	return result;
+}
+
+inline float angle_vec3s(const vec3 u, const vec3 v)
+{
+	return acos(dot_vec3s(u, v));
+}
 
 
 typedef struct vec4
@@ -432,19 +962,6 @@ typedef struct vec4
 	float w;
 } vec4;
 
-#define SET_VEC2(v, _x, _y) \
-	do {\
-	(v).x = _x;\
-	(v).y = _y;\
-	} while (0)
-
-#define SET_VEC3(v, _x, _y, _z) \
-	do {\
-	(v).x = _x;\
-	(v).y = _y;\
-	(v).z = _z;\
-	} while (0)
-
 #define SET_VEC4(v, _x, _y, _z, _w) \
 	do {\
 	(v).x = _x;\
@@ -453,34 +970,10 @@ typedef struct vec4
 	(v).w = _w;\
 	} while (0)
 
-inline vec2 make_vec2(float x, float y)
-{
-	vec2 v = { x, y };
-	return v;
-}
-
-inline vec3 make_vec3(float x, float y, float z)
-{
-	vec3 v = { x, y, z };
-	return v;
-}
-
 inline vec4 make_vec4(float x, float y, float z, float w)
 {
 	vec4 v = { x, y, z, w };
 	return v;
-}
-
-inline vec2 negate_vec2(vec2 v)
-{
-	vec2 r = { -v.x, -v.y };
-	return r;
-}
-
-inline vec3 negate_vec3(vec3 v)
-{
-	vec3 r = { -v.x, -v.y, -v.z };
-	return r;
 }
 
 inline vec4 negate_vec4(vec4 v)
@@ -489,46 +982,14 @@ inline vec4 negate_vec4(vec4 v)
 	return r;
 }
 
-inline void fprint_vec2(FILE* f, vec2 v, const char* append)
-{
-	fprintf(f, "(%f, %f)%s", v.x, v.y, append);
-}
-
-inline void fprint_vec3(FILE* f, vec3 v, const char* append)
-{
-	fprintf(f, "(%f, %f, %f)%s", v.x, v.y, v.z, append);
-}
-
 inline void fprint_vec4(FILE* f, vec4 v, const char* append)
 {
 	fprintf(f, "(%f, %f, %f, %f)%s", v.x, v.y, v.z, v.w, append);
 }
 
-inline void print_vec2(vec2 v, const char* append)
-{
-	printf("(%f, %f)%s", v.x, v.y, append);
-}
-
-inline void print_vec3(vec3 v, const char* append)
-{
-	printf("(%f, %f, %f)%s", v.x, v.y, v.z, append);
-}
-
 inline void print_vec4(vec4 v, const char* append)
 {
 	printf("(%f, %f, %f, %f)%s", v.x, v.y, v.z, v.w, append);
-}
-
-inline int fread_vec2(FILE* f, vec2* v)
-{
-	int tmp = fscanf(f, " (%f, %f)", &v->x, &v->y);
-	return (tmp == 2);
-}
-
-inline int fread_vec3(FILE* f, vec3* v)
-{
-	int tmp = fscanf(f, " (%f, %f, %f)", &v->x, &v->y, &v->z);
-	return (tmp == 3);
 }
 
 inline int fread_vec4(FILE* f, vec4* v)
@@ -537,64 +998,72 @@ inline int fread_vec4(FILE* f, vec4* v)
 	return (tmp == 4);
 }
 
-
-typedef struct dvec2
+inline float length_vec4(vec4 a)
 {
-	double x;
-	double y;
-} dvec2;
-
-
-typedef struct dvec3
-{
-	double x;
-	double y;
-	double z;
-} dvec3;
-
-
-typedef struct dvec4
-{
-	double x;
-	double y;
-	double z;
-	double w;
-} dvec4;
-
-inline void fprint_dvec2(FILE* f, dvec2 v, const char* append)
-{
-	fprintf(f, "(%f, %f)%s", v.x, v.y, append);
+	return sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
 }
 
-inline void fprint_dvec3(FILE* f, dvec3 v, const char* append)
+inline vec4 norm_vec4(vec4 a)
 {
-	fprintf(f, "(%f, %f, %f)%s", v.x, v.y, v.z, append);
+	float l = length_vec4(a);
+	vec4 c = { a.x/l, a.y/l, a.z/l, a.w/l };
+	return c;
 }
 
-inline void fprint_dvec4(FILE* f, dvec4 v, const char* append)
+inline void normalize_vec4(vec4* a)
 {
-	fprintf(f, "(%f, %f, %f, %f)%s", v.x, v.y, v.z, v.w, append);
+	float l = length_vec4(*a);
+	a->x /= l;
+	a->y /= l;
+	a->z /= l;
+	a->w /= l;
 }
 
-
-inline int fread_dvec2(FILE* f, dvec2* v)
+inline vec4 add_vec4s(vec4 a, vec4 b)
 {
-	int tmp = fscanf(f, " (%lf, %lf)", &v->x, &v->y);
-	return (tmp == 2);
+	vec4 c = { a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w };
+	return c;
 }
 
-inline int fread_dvec3(FILE* f, dvec3* v)
+inline vec4 sub_vec4s(vec4 a, vec4 b)
 {
-	int tmp = fscanf(f, " (%lf, %lf, %lf)", &v->x, &v->y, &v->z);
-	return (tmp == 3);
+	vec4 c = { a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w };
+	return c;
 }
 
-inline int fread_dvec4(FILE* f, dvec4* v)
+inline vec4 mult_vec4s(vec4 a, vec4 b)
 {
-	int tmp = fscanf(f, " (%lf, %lf, %lf, %lf)", &v->x, &v->y, &v->z, &v->w);
-	return (tmp == 4);
+	vec4 c = { a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w };
+	return c;
 }
 
+inline vec4 div_vec4s(vec4 a, vec4 b)
+{
+	vec4 c = { a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w };
+	return c;
+}
+
+inline float dot_vec4s(vec4 a, vec4 b)
+{
+	return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
+inline vec4 scale_vec4(vec4 a, float s)
+{
+	vec4 b = { a.x * s, a.y * s, a.z * s, a.w * s };
+	return b;
+}
+
+inline int equal_vec4s(vec4 a, vec4 b)
+{
+	return (a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w);
+}
+
+inline int equal_epsilon_vec4s(vec4 a, vec4 b, float epsilon)
+{
+	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon &&
+	        fabs(a.z - b.z) < epsilon && fabs(a.w - b.w) < epsilon);
+}
 
 
 typedef struct ivec2
@@ -603,6 +1072,23 @@ typedef struct ivec2
 	int y;
 } ivec2;
 
+inline ivec2 make_ivec2(int x, int y)
+{
+	ivec2 v = { x, y };
+	return v;
+}
+
+inline void fprint_ivec2(FILE* f, ivec2 v, const char* append)
+{
+	fprintf(f, "(%d, %d)%s", v.x, v.y, append);
+}
+
+inline int fread_ivec2(FILE* f, ivec2* v)
+{
+	int tmp = fscanf(f, " (%d, %d)", &v->x, &v->y);
+	return (tmp == 2);
+}
+
 
 typedef struct ivec3
 {
@@ -610,6 +1096,24 @@ typedef struct ivec3
 	int y;
 	int z;
 } ivec3;
+
+inline ivec3 make_ivec3(int x, int y, int z)
+{
+	ivec3 v = { x, y, z };
+	return v;
+}
+
+inline void fprint_ivec3(FILE* f, ivec3 v, const char* append)
+{
+	fprintf(f, "(%d, %d, %d)%s", v.x, v.y, v.z, append);
+}
+
+inline int fread_ivec3(FILE* f, ivec3* v)
+{
+	int tmp = fscanf(f, " (%d, %d, %d)", &v->x, &v->y, &v->z);
+	return (tmp == 3);
+}
+
 
 
 typedef struct ivec4
@@ -620,49 +1124,15 @@ typedef struct ivec4
 	int w;
 } ivec4;
 
-inline ivec2 make_ivec2(int x, int y)
-{
-	ivec2 v = { x, y };
-	return v;
-}
-
-inline ivec3 make_ivec3(int x, int y, int z)
-{
-	ivec3 v = { x, y, z };
-	return v;
-}
-
 inline ivec4 make_ivec4(int x, int y, int z, int w)
 {
 	ivec4 v = { x, y, z, w };
 	return v;
 }
 
-inline void fprint_ivec2(FILE* f, ivec2 v, const char* append)
-{
-	fprintf(f, "(%d, %d)%s", v.x, v.y, append);
-}
-
-inline void fprint_ivec3(FILE* f, ivec3 v, const char* append)
-{
-	fprintf(f, "(%d, %d, %d)%s", v.x, v.y, v.z, append);
-}
-
 inline void fprint_ivec4(FILE* f, ivec4 v, const char* append)
 {
 	fprintf(f, "(%d, %d, %d, %d)%s", v.x, v.y, v.z, v.w, append);
-}
-
-inline int fread_ivec2(FILE* f, ivec2* v)
-{
-	int tmp = fscanf(f, " (%d, %d)", &v->x, &v->y);
-	return (tmp == 2);
-}
-
-inline int fread_ivec3(FILE* f, ivec3* v)
-{
-	int tmp = fscanf(f, " (%d, %d, %d)", &v->x, &v->y, &v->z);
-	return (tmp == 3);
 }
 
 inline int fread_ivec4(FILE* f, ivec4* v)
@@ -671,11 +1141,30 @@ inline int fread_ivec4(FILE* f, ivec4* v)
 	return (tmp == 4);
 }
 
+
+
 typedef struct uvec2
 {
 	unsigned int x;
 	unsigned int y;
 } uvec2;
+
+inline uvec2 make_uvec2(unsigned int x, unsigned int y)
+{
+	uvec2 v = { x, y };
+	return v;
+}
+
+inline void fprint_uvec2(FILE* f, uvec2 v, const char* append)
+{
+	fprintf(f, "(%u, %u)%s", v.x, v.y, append);
+}
+
+inline int fread_uvec2(FILE* f, uvec2* v)
+{
+	int tmp = fscanf(f, " (%u, %u)", &v->x, &v->y);
+	return (tmp == 2);
+}
 
 
 typedef struct uvec3
@@ -684,6 +1173,23 @@ typedef struct uvec3
 	unsigned int y;
 	unsigned int z;
 } uvec3;
+
+inline uvec3 make_uvec3(unsigned int x, unsigned int y, unsigned int z)
+{
+	uvec3 v = { x, y, z };
+	return v;
+}
+
+inline void fprint_uvec3(FILE* f, uvec3 v, const char* append)
+{
+	fprintf(f, "(%u, %u, %u)%s", v.x, v.y, v.z, append);
+}
+
+inline int fread_uvec3(FILE* f, uvec3* v)
+{
+	int tmp = fscanf(f, " (%u, %u, %u)", &v->x, &v->y, &v->z);
+	return (tmp == 3);
+}
 
 
 typedef struct uvec4
@@ -694,33 +1200,15 @@ typedef struct uvec4
 	unsigned int w;
 } uvec4;
 
-
-inline void fprint_uvec2(FILE* f, uvec2 v, const char* append)
+inline uvec4 make_uvec4(unsigned int x, unsigned int y, unsigned int z, unsigned int w)
 {
-	fprintf(f, "(%u, %u)%s", v.x, v.y, append);
-}
-
-inline void fprint_uvec3(FILE* f, uvec3 v, const char* append)
-{
-	fprintf(f, "(%u, %u, %u)%s", v.x, v.y, v.z, append);
+	uvec4 v = { x, y, z, w };
+	return v;
 }
 
 inline void fprint_uvec4(FILE* f, uvec4 v, const char* append)
 {
 	fprintf(f, "(%u, %u, %u, %u)%s", v.x, v.y, v.z, v.w, append);
-}
-
-
-inline int fread_uvec2(FILE* f, uvec2* v)
-{
-	int tmp = fscanf(f, " (%u, %u)", &v->x, &v->y);
-	return (tmp == 2);
-}
-
-inline int fread_uvec3(FILE* f, uvec3* v)
-{
-	int tmp = fscanf(f, " (%u, %u, %u)", &v->x, &v->y, &v->z);
-	return (tmp == 3);
 }
 
 inline int fread_uvec4(FILE* f, uvec4* v)
@@ -736,6 +1224,25 @@ typedef struct bvec2
 	u8 y;
 } bvec2;
 
+// TODO What to do here? param type?  enforce 0 or 1?
+inline bvec2 make_bvec2(int x, int y)
+{
+	bvec2 v = { !!x, !!y };
+	return v;
+}
+
+inline void fprint_bvec2(FILE* f, bvec2 v, const char* append)
+{
+	fprintf(f, "(%u, %u)%s", v.x, v.y, append);
+}
+
+// Should technically use SCNu8 macro not hhu
+inline int fread_bvec2(FILE* f, bvec2* v)
+{
+	int tmp = fscanf(f, " (%hhu, %hhu)", &v->x, &v->y);
+	return (tmp == 2);
+}
+
 
 typedef struct bvec3
 {
@@ -743,6 +1250,23 @@ typedef struct bvec3
 	u8 y;
 	u8 z;
 } bvec3;
+
+inline bvec3 make_bvec3(int x, int y, int z)
+{
+	bvec3 v = { !!x, !!y, !!z };
+	return v;
+}
+
+inline void fprint_bvec3(FILE* f, bvec3 v, const char* append)
+{
+	fprintf(f, "(%u, %u, %u)%s", v.x, v.y, v.z, append);
+}
+
+inline int fread_bvec3(FILE* f, bvec3* v)
+{
+	int tmp = fscanf(f, " (%hhu, %hhu, %hhu)", &v->x, &v->y, &v->z);
+	return (tmp == 3);
+}
 
 
 typedef struct bvec4
@@ -753,51 +1277,15 @@ typedef struct bvec4
 	u8 w;
 } bvec4;
 
-// TODO What to do here? param type?  enforce 0 or 1?
-inline bvec2 make_bvec2(int x, int y)
-{
-	bvec2 v = { !!x, !!y };
-	return v;
-}
-
-inline bvec3 make_bvec3(int x, int y, int z)
-{
-	bvec3 v = { !!x, !!y, !!z };
-	return v;
-}
-
 inline bvec4 make_bvec4(int x, int y, int z, int w)
 {
 	bvec4 v = { !!x, !!y, !!z, !!w };
 	return v;
 }
 
-inline void fprint_bvec2(FILE* f, bvec2 v, const char* append)
-{
-	fprintf(f, "(%u, %u)%s", v.x, v.y, append);
-}
-
-inline void fprint_bvec3(FILE* f, bvec3 v, const char* append)
-{
-	fprintf(f, "(%u, %u, %u)%s", v.x, v.y, v.z, append);
-}
-
 inline void fprint_bvec4(FILE* f, bvec4 v, const char* append)
 {
 	fprintf(f, "(%u, %u, %u, %u)%s", v.x, v.y, v.z, v.w, append);
-}
-
-// Should technically use SCNu8 macro not hhu
-inline int fread_bvec2(FILE* f, bvec2* v)
-{
-	int tmp = fscanf(f, " (%hhu, %hhu)", &v->x, &v->y);
-	return (tmp == 2);
-}
-
-inline int fread_bvec3(FILE* f, bvec3* v)
-{
-	int tmp = fscanf(f, " (%hhu, %hhu, %hhu)", &v->x, &v->y, &v->z);
-	return (tmp == 3);
 }
 
 inline int fread_bvec4(FILE* f, bvec4* v)
@@ -806,184 +1294,6 @@ inline int fread_bvec4(FILE* f, bvec4* v)
 	return (tmp == 4);
 }
 
-
-
-inline float length_vec2(vec2 a)
-{
-	return sqrt(a.x * a.x + a.y * a.y);
-}
-
-inline float length_vec3(vec3 a)
-{
-	return sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-}
-
-
-inline vec2 norm_vec2(vec2 a)
-{
-	float l = length_vec2(a);
-	vec2 c = { a.x/l, a.y/l };
-	return c;
-}
-
-inline vec3 norm_vec3(vec3 a)
-{
-	float l = length_vec3(a);
-	vec3 c = { a.x/l, a.y/l, a.z/l };
-	return c;
-}
-
-inline void normalize_vec2(vec2* a)
-{
-	float l = length_vec2(*a);
-	a->x /= l;
-	a->y /= l;
-}
-
-inline void normalize_vec3(vec3* a)
-{
-	float l = length_vec3(*a);
-	a->x /= l;
-	a->y /= l;
-	a->z /= l;
-}
-
-inline vec2 add_vec2s(vec2 a, vec2 b)
-{
-	vec2 c = { a.x + b.x, a.y + b.y };
-	return c;
-}
-
-inline vec3 add_vec3s(vec3 a, vec3 b)
-{
-	vec3 c = { a.x + b.x, a.y + b.y, a.z + b.z };
-	return c;
-}
-
-inline vec4 add_vec4s(vec4 a, vec4 b)
-{
-	vec4 c = { a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w };
-	return c;
-}
-
-inline vec2 sub_vec2s(vec2 a, vec2 b)
-{
-	vec2 c = { a.x - b.x, a.y - b.y };
-	return c;
-}
-
-inline vec3 sub_vec3s(vec3 a, vec3 b)
-{
-	vec3 c = { a.x - b.x, a.y - b.y, a.z - b.z };
-	return c;
-}
-
-inline vec4 sub_vec4s(vec4 a, vec4 b)
-{
-	vec4 c = { a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w };
-	return c;
-}
-
-inline vec2 mult_vec2s(vec2 a, vec2 b)
-{
-	vec2 c = { a.x * b.x, a.y * b.y };
-	return c;
-}
-
-inline vec3 mult_vec3s(vec3 a, vec3 b)
-{
-	vec3 c = { a.x * b.x, a.y * b.y, a.z * b.z };
-	return c;
-}
-
-inline vec4 mult_vec4s(vec4 a, vec4 b)
-{
-	vec4 c = { a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w };
-	return c;
-}
-
-inline vec2 div_vec2s(vec2 a, vec2 b)
-{
-	vec2 c = { a.x / b.x, a.y / b.y };
-	return c;
-}
-
-inline vec3 div_vec3s(vec3 a, vec3 b)
-{
-	vec3 c = { a.x / b.x, a.y / b.y, a.z / b.z };
-	return c;
-}
-
-inline vec4 div_vec4s(vec4 a, vec4 b)
-{
-	vec4 c = { a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w };
-	return c;
-}
-
-inline float dot_vec2s(vec2 a, vec2 b)
-{
-	return a.x*b.x + a.y*b.y;
-}
-
-inline float dot_vec3s(vec3 a, vec3 b)
-{
-	return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-inline float dot_vec4s(vec4 a, vec4 b)
-{
-	return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-}
-
-inline vec2 scale_vec2(vec2 a, float s)
-{
-	vec2 b = { a.x * s, a.y * s };
-	return b;
-}
-
-inline vec3 scale_vec3(vec3 a, float s)
-{
-	vec3 b = { a.x * s, a.y * s, a.z * s };
-	return b;
-}
-
-inline vec4 scale_vec4(vec4 a, float s)
-{
-	vec4 b = { a.x * s, a.y * s, a.z * s, a.w * s };
-	return b;
-}
-
-inline int equal_vec2s(vec2 a, vec2 b)
-{
-	return (a.x == b.x && a.y == b.y);
-}
-
-inline int equal_vec3s(vec3 a, vec3 b)
-{
-	return (a.x == b.x && a.y == b.y && a.z == b.z);
-}
-
-inline int equal_vec4s(vec4 a, vec4 b)
-{
-	return (a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w);
-}
-
-inline int equal_epsilon_vec2s(vec2 a, vec2 b, float epsilon)
-{
-	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon);
-}
-
-inline int equal_epsilon_vec3s(vec3 a, vec3 b, float epsilon)
-{
-	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon &&
-			fabs(a.z - b.z) < epsilon);
-}
-
-inline int equal_epsilon_vec4s(vec4 a, vec4 b, float epsilon)
-{
-	return (fabs(a.x-b.x) < epsilon && fabs(a.y - b.y) < epsilon &&
-	        fabs(a.z - b.z) < epsilon && fabs(a.w - b.w) < epsilon);
-}
 
 inline vec2 vec4_to_vec2(vec4 a)
 {
@@ -1008,21 +1318,6 @@ inline vec3 vec4_to_vec3h(vec4 a)
 	vec3 v = { a.x/a.w, a.y/a.w, a.z/a.w };
 	return v;
 }
-
-inline vec3 cross_product(const vec3 u, const vec3 v)
-{
-	vec3 result;
-	result.x = u.y*v.z - v.y*u.z;
-	result.y = -u.x*v.z + v.x*u.z;
-	result.z = u.x*v.y - v.x*u.y;
-	return result;
-}
-
-inline float angle_between_vec3(const vec3 u, const vec3 v)
-{
-	return acos(dot_vec3s(u, v));
-}
-
 
 
 /* matrices **************/
@@ -1232,8 +1527,6 @@ inline void print_mat4(mat4 m, const char* append)
 	fprint_mat4(stdout, m, append);
 }
 
-
-
 //TODO define macros for doing array version
 inline vec2 mult_mat2_vec2(mat2 m, vec2 v)
 {
@@ -1322,7 +1615,6 @@ void make_viewport_matrix(mat4 mat, int x, int y, unsigned int width, unsigned i
 void lookAt(mat4 mat, vec3 eye, vec3 center, vec3 up);
 
 
-
 ///////////Matrix transformation functions
 inline void scale_mat3(mat3 m, float x, float y, float z)
 {
@@ -1367,9 +1659,6 @@ inline void translation_mat4(mat4 m, float x, float y, float z)
 	m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
 #endif
 }
-
-
-
 
 
 // Extract a rotation matrix from a 4x4 matrix
@@ -1429,6 +1718,235 @@ inline void extract_rotation_mat4(mat3 dst, mat4 src, int normalize)
 #undef M33
 #undef M44
 
+
+// returns float [0,1)
+inline float rsw_randf(void)
+{
+	return rand() / (RAND_MAX + 1.0f);
+}
+
+inline float rsw_randf_range(float min, float max)
+{
+	return min + (max-min) * rsw_randf();
+}
+
+inline double rsw_map(double x, double a, double b, double c, double d)
+{
+	return (x-a)/(b-a) * (d-c) + c;
+}
+
+inline float rsw_mapf(float x, float a, float b, float c, float d)
+{
+	return (x-a)/(b-a) * (d-c) + c;
+}
+
+
+typedef struct Color
+{
+	u8 r;
+	u8 g;
+	u8 b;
+	u8 a;
+} Color;
+
+/*
+Color make_Color(void)
+{
+	r = g = b = 0;
+	a = 255;
+}
+*/
+
+inline Color make_Color(u8 red, u8 green, u8 blue, u8 alpha)
+{
+	Color c = { red, green, blue, alpha };
+	return c;
+}
+
+inline void print_Color(Color c, const char* append)
+{
+	printf("(%d, %d, %d, %d)%s", c.r, c.g, c.b, c.a, append);
+}
+
+inline Color vec4_to_Color(vec4 v)
+{
+	//assume all in the range of [0, 1]
+	//NOTE(rswinkle): There are other ways of doing the conversion
+	//
+	// round like HH: (u8)(v.x * 255.0f + 0.5f)
+	// allocate equal sized buckets: (u8)(v.x * 256.0f - EPSILON) (where epsilon is eg 0.000001f)
+	//
+	// But as far as I can tell the spec does it this way
+	Color c;
+	c.r = v.x * 255.0f;
+	c.g = v.y * 255.0f;
+	c.b = v.z * 255.0f;
+	c.a = v.w * 255.0f;
+	return c;
+}
+
+inline vec4 Color_to_vec4(Color c)
+{
+	vec4 v = { (float)c.r/255.0f, (float)c.g/255.0f, (float)c.b/255.0f, (float)c.a/255.0f };
+	return v;
+}
+
+typedef struct Line
+{
+	float A, B, C;
+} Line;
+
+inline Line make_Line(float x1, float y1, float x2, float y2)
+{
+	Line l;
+	l.A = y1 - y2;
+	l.B = x2 - x1;
+	l.C = x1*y2 - x2*y1;
+	return l;
+}
+
+inline void normalize_line(Line* line)
+{
+	// TODO could enforce that n always points toward +y or +x...should I?
+	vec2 n = { line->A, line->B };
+	float len = length_vec2(n);
+	line->A /= len;
+	line->B /= len;
+	line->C /= len;
+}
+
+inline float line_func(Line* line, float x, float y)
+{
+	return line->A*x + line->B*y + line->C;
+}
+inline float line_findy(Line* line, float x)
+{
+	return -(line->A*x + line->C)/line->B;
+}
+
+inline float line_findx(Line* line, float y)
+{
+	return -(line->B*y + line->C)/line->A;
+}
+
+// return squared distance from c to line segment between a and b
+inline float sq_dist_pt_segment2d(vec2 a, vec2 b, vec2 c)
+{
+	vec2 ab = sub_vec2s(b, a);
+	vec2 ac = sub_vec2s(c, a);
+	vec2 bc = sub_vec2s(c, b);
+	float e = dot_vec2s(ac, ab);
+
+	// cases where c projects outside ab
+	if (e <= 0.0f) return dot_vec2s(ac, ac);
+	float f = dot_vec2s(ab, ab);
+	if (e >= f) return dot_vec2s(bc, bc);
+
+	// handle cases where c projects onto ab
+	return dot_vec2s(ac, ac) - e * e / f;
+}
+
+// return t and closest pt on segment ab to c
+inline void closest_pt_pt_segment(vec2 c, vec2 a, vec2 b, float* t, vec2* d)
+{
+	vec2 ab = sub_vec2s(b, a);
+
+	// project c onto ab, compute t
+	float t_ = dot_vec2s(sub_vec2s(c, a), ab) / dot_vec2s(ab, ab);
+
+	// clamp if outside segment
+	if (t_ < 0.0f) t_ = 0.0f;
+	if (t_ > 1.0f) t_ = 1.0f;
+
+	// compute projected position
+	*d = add_vec2s(a, scale_vec2(ab, t_));
+	*t = t_;
+}
+
+inline float closest_pt_pt_segment_t(vec2 c, vec2 a, vec2 b)
+{
+	vec2 ab = sub_vec2s(b, a);
+
+	// project c onto ab, compute t
+	float t = dot_vec2s(sub_vec2s(c, a), ab) / dot_vec2s(ab, ab);
+	if (t < 0.0f) t = 0.0f;
+	if (t > 1.0f) t = 1.0f;
+
+	return t;
+}
+
+typedef struct Plane
+{
+	vec3 n;	//normal points x on plane satisfy n dot x = d
+	float d; //d = n dot p
+
+} Plane;
+
+/*
+Plane(void) {}
+Plane(vec3 a, vec3 b, vec3 c)	//ccw winding
+{
+	n = cross_product(b-a, c-a).norm();
+	d = n * a;
+}
+*/
+
+//int intersect_segment_plane(vec3 a, vec3 b, Plane p, float* t, vec3* q);
+
+
+// TODO hmm would have to change mat3 and mat4 to proper
+// structures to have operators return them since our
+// current mat*mat functions take the output mat as a parameter
+
+
+// For some reason g++ chokes on these operator overloads but they work just
+// fine with clang++.  Commented till I figure out what's going on.
+/*
+#ifdef __cplusplus
+inline vec2 operator*(vec2 v, float a) { return scale_vec2(v, a); }
+inline vec2 operator*(float a, vec2 v) { return scale_vec2(v, a); }
+inline vec3 operator*(vec3 v, float a) { return scale_vec3(v, a); }
+inline vec3 operator*(float a, vec3 v) { return scale_vec3(v, a); }
+inline vec4 operator*(vec4 v, float a) { return scale_vec4(v, a); }
+inline vec4 operator*(float a, vec4 v) { return scale_vec4(v, a); }
+
+inline vec2 operator+(vec2 v1, vec2 v2) { return add_vec2s(v1, v2); }
+inline vec3 operator+(vec3 v1, vec3 v2) { return add_vec3s(v1, v2); }
+inline vec4 operator+(vec4 v1, vec4 v2) { return add_vec4s(v1, v2); }
+
+inline vec2 operator-(vec2 v1, vec2 v2) { return sub_vec2s(v1, v2); }
+inline vec3 operator-(vec3 v1, vec3 v2) { return sub_vec3s(v1, v2); }
+inline vec4 operator-(vec4 v1, vec4 v2) { return sub_vec4s(v1, v2); }
+
+inline int operator==(vec2 v1, vec2 v2) { return equal_vec2s(v1, v2); }
+inline int operator==(vec3 v1, vec3 v2) { return equal_vec3s(v1, v2); }
+inline int operator==(vec4 v1, vec4 v2) { return equal_vec4s(v1, v2); }
+
+inline vec2 operator-(vec2 v) { return negate_vec2(v); }
+inline vec3 operator-(vec3 v) { return negate_vec3(v); }
+inline vec4 operator-(vec4 v) { return negate_vec4(v); }
+
+inline vec2 operator*(mat2 m, vec2 v) { return mult_mat2_vec2(m, v); }
+inline vec3 operator*(mat3 m, vec3 v) { return mult_mat3_vec3(m, v); }
+inline vec4 operator*(mat4 m, vec4 v) { return mult_mat4_vec4(m, v); }
+
+#include <iostream>
+static inline std::ostream& operator<<(std::ostream& stream, const vec2& a)
+{
+	return stream <<"("<<a.x<<", "<<a.y<<")";
+}
+static inline std::ostream& operator<<(std::ostream& stream, const vec3& a)
+{
+	return stream <<"("<<a.x<<", "<<a.y<<", "<<a.z<<")";
+}
+
+static inline std::ostream& operator<<(std::ostream& stream, const vec4& a)
+{
+	return stream <<"("<<a.x<<", "<<a.y<<", "<<a.z<<", "<<a.w<<")";
+}
+
+#endif
+*/
 
 
 // Built-in GLSL functions from Chapter 8 of the GLSLangSpec.3.30.pdf
@@ -1710,7 +2228,7 @@ static inline int clampi(int i, int min, int max)
 	return i;
 }
 
-static inline float mix(float x, float y, float a)
+static inline float mixf(float x, float y, float a)
 {
 	return x*(1-a) + y*a;
 }
@@ -1736,7 +2254,7 @@ PGL_STATIC_VECTORIZE2_VEC(maxf)
 
 PGL_STATIC_VECTORIZE_VEC(clamp_01)
 PGL_STATIC_VECTORIZE_2_VEC(clamp)
-PGL_STATIC_VECTORIZE2_1_VEC(mix)
+PGL_STATIC_VECTORIZE2_1_VEC(mixf)
 
 PGL_VECTORIZE_VEC(isnan)
 PGL_VECTORIZE_VEC(isinf)
@@ -1746,11 +2264,11 @@ PGL_VECTORIZE_VEC(isinf)
 // Most of these are elsewhere in the the file
 // TODO Where should these go?
 
-static float distance_vec2(vec2 a, vec2 b)
+static inline float distance_vec2(vec2 a, vec2 b)
 {
 	return length_vec2(sub_vec2s(a, b));
 }
-static float distance_vec3(vec3 a, vec3 b)
+static inline float distance_vec3(vec3 a, vec3 b)
 {
 	return length_vec3(sub_vec3s(a, b));
 }
@@ -1790,251 +2308,30 @@ PGL_STATIC_VECTORIZE2_BVEC(notEqual)
 // 8.7 Texture Lookup Functions
 // currently in gl_glsl.h/c
 
-
-
-
-
-
-typedef struct Color
-{
-	u8 r;
-	u8 g;
-	u8 b;
-	u8 a;
-} Color;
-
-/*
-Color make_Color()
-{
-	r = g = b = 0;
-	a = 255;
-}
-*/
-
-inline Color make_Color(u8 red, u8 green, u8 blue, u8 alpha)
-{
-	Color c = { red, green, blue, alpha };
-	return c;
-}
-
-inline void print_Color(Color c, const char* append)
-{
-	printf("(%d, %d, %d, %d)%s", c.r, c.g, c.b, c.a, append);
-}
-
-inline Color vec4_to_Color(vec4 v)
-{
-	//assume all in the range of [0, 1]
-	//NOTE(rswinkle): There are other ways of doing the conversion
-	//
-	// round like HH: (u8)(v.x * 255.0f + 0.5f)
-	// allocate equal sized buckets: (u8)(v.x * 256.0f - EPSILON) (where epsilon is eg 0.000001f)
-	//
-	// But as far as I can tell the spec does it this way
-	Color c;
-	c.r = v.x * 255.0f;
-	c.g = v.y * 255.0f;
-	c.b = v.z * 255.0f;
-	c.a = v.w * 255.0f;
-	return c;
-}
-
-inline vec4 Color_to_vec4(Color c)
-{
-	vec4 v = { (float)c.r/255.0f, (float)c.g/255.0f, (float)c.b/255.0f, (float)c.a/255.0f };
-	return v;
-}
-
-typedef struct Line
-{
-	float A, B, C;
-} Line;
-
-inline Line make_Line(float x1, float y1, float x2, float y2)
-{
-	Line l;
-	l.A = y1 - y2;
-	l.B = x2 - x1;
-	l.C = x1*y2 - x2*y1;
-	return l;
-}
-
-inline void normalize_line(Line* line)
-{
-	vec2 n = { line->A, line->B };
-	float len = length_vec2(n);
-	line->A /= len;
-	line->B /= len;
-	line->C /= len;
-}
-
-inline float line_func(Line* line, float x, float y)
-{
-	return line->A*x + line->B*y + line->C;
-}
-inline float line_findy(Line* line, float x)
-{
-	return -(line->A*x + line->C)/line->B;
-}
-
-inline float line_findx(Line* line, float y)
-{
-	return -(line->B*y + line->C)/line->A;
-}
-
-// return squared distance from c to line segment between a and b
-inline float sq_dist_pt_segment2d(vec2 a, vec2 b, vec2 c)
-{
-	vec2 ab = sub_vec2s(b, a);
-	vec2 ac = sub_vec2s(c, a);
-	vec2 bc = sub_vec2s(c, b);
-	float e = dot_vec2s(ac, ab);
-
-	// cases where c projects outside ab
-	if (e <= 0.0f) return dot_vec2s(ac, ac);
-	float f = dot_vec2s(ab, ab);
-	if (e >= f) return dot_vec2s(bc, bc);
-
-	// handle cases where c projects onto ab
-	return dot_vec2s(ac, ac) - e * e / f;
-}
-
-
-typedef struct Plane
-{
-	vec3 n;	//normal points x on plane satisfy n dot x = d
-	float d; //d = n dot p
-
-} Plane;
-
-/*
-Plane() {}
-Plane(vec3 a, vec3 b, vec3 c)	//ccw winding
-{
-	n = cross_product(b-a, c-a).norm();
-	d = n * a;
-}
-*/
-
-//int intersect_segment_plane(vec3 a, vec3 b, Plane p, float* t, vec3* q);
-
-
-// TODO hmm would have to change mat3 and mat4 to proper
-// structures to have operators return them since our
-// current mat*mat functions take the output mat as a parameter
-
-
-// For some reason g++ chokes on these operator overloads but they work just
-// fine with clang++.  Commented till I figure out what's going on.
-/*
-#ifdef __cplusplus
-inline vec2 operator*(vec2 v, float a) { return scale_vec2(v, a); }
-inline vec2 operator*(float a, vec2 v) { return scale_vec2(v, a); }
-inline vec3 operator*(vec3 v, float a) { return scale_vec3(v, a); }
-inline vec3 operator*(float a, vec3 v) { return scale_vec3(v, a); }
-inline vec4 operator*(vec4 v, float a) { return scale_vec4(v, a); }
-inline vec4 operator*(float a, vec4 v) { return scale_vec4(v, a); }
-
-inline vec2 operator+(vec2 v1, vec2 v2) { return add_vec2s(v1, v2); }
-inline vec3 operator+(vec3 v1, vec3 v2) { return add_vec3s(v1, v2); }
-inline vec4 operator+(vec4 v1, vec4 v2) { return add_vec4s(v1, v2); }
-
-inline vec2 operator-(vec2 v1, vec2 v2) { return sub_vec2s(v1, v2); }
-inline vec3 operator-(vec3 v1, vec3 v2) { return sub_vec3s(v1, v2); }
-inline vec4 operator-(vec4 v1, vec4 v2) { return sub_vec4s(v1, v2); }
-
-inline int operator==(vec2 v1, vec2 v2) { return equal_vec2s(v1, v2); }
-inline int operator==(vec3 v1, vec3 v2) { return equal_vec3s(v1, v2); }
-inline int operator==(vec4 v1, vec4 v2) { return equal_vec4s(v1, v2); }
-
-inline vec2 operator-(vec2 v) { return negate_vec2(v); }
-inline vec3 operator-(vec3 v) { return negate_vec3(v); }
-inline vec4 operator-(vec4 v) { return negate_vec4(v); }
-
-inline vec2 operator*(mat2 m, vec2 v) { return mult_mat2_vec2(m, v); }
-inline vec3 operator*(mat3 m, vec3 v) { return mult_mat3_vec3(m, v); }
-inline vec4 operator*(mat4 m, vec4 v) { return mult_mat4_vec4(m, v); }
-
-#include <iostream>
-static inline std::ostream& operator<<(std::ostream& stream, const vec2& a)
-{
-	return stream <<"("<<a.x<<", "<<a.y<<")";
-}
-static inline std::ostream& operator<<(std::ostream& stream, const vec3& a)
-{
-	return stream <<"("<<a.x<<", "<<a.y<<", "<<a.z<<")";
-}
-
-static inline std::ostream& operator<<(std::ostream& stream, const vec4& a)
-{
-	return stream <<"("<<a.x<<", "<<a.y<<", "<<a.z<<", "<<a.w<<")";
-}
-
 #endif
-*/
-
-
-
-
-
-/* CRSW_MATH_H */
-#endif
-
-#ifndef CVEC_SIZE_T
-#include <stdlib.h>
-#define CVEC_SIZE_T size_t
-#endif
-
-#ifndef CVEC_SZ
-#define CVEC_SZ
-typedef CVEC_SIZE_T cvec_sz;
-#endif
-
-
-/** Data structure for float vector. */
-typedef struct cvector_float
-{
-	float* a;           /**< Array. */
-	cvec_sz size;       /**< Current size (amount you use when manipulating array directly). */
-	cvec_sz capacity;   /**< Allocated size of array; always >= size. */
-} cvector_float;
-
-
-
-extern cvec_sz CVEC_float_SZ;
-
-int cvec_float(cvector_float* vec, cvec_sz size, cvec_sz capacity);
-int cvec_init_float(cvector_float* vec, float* vals, cvec_sz num);
-
-cvector_float* cvec_float_heap(cvec_sz size, cvec_sz capacity);
-cvector_float* cvec_init_float_heap(float* vals, cvec_sz num);
-int cvec_copyc_float(void* dest, void* src);
-int cvec_copy_float(cvector_float* dest, cvector_float* src);
-
-int cvec_push_float(cvector_float* vec, float a);
-float cvec_pop_float(cvector_float* vec);
-
-int cvec_extend_float(cvector_float* vec, cvec_sz num);
-int cvec_insert_float(cvector_float* vec, cvec_sz i, float a);
-int cvec_insert_array_float(cvector_float* vec, cvec_sz i, float* a, cvec_sz num);
-float cvec_replace_float(cvector_float* vec, cvec_sz i, float a);
-void cvec_erase_float(cvector_float* vec, cvec_sz start, cvec_sz end);
-int cvec_reserve_float(cvector_float* vec, cvec_sz size);
-#define cvec_shrink_to_fit_float(vec) cvec_set_cap_float((vec), (vec)->size)
-int cvec_set_cap_float(cvector_float* vec, cvec_sz size);
-void cvec_set_val_sz_float(cvector_float* vec, float val);
-void cvec_set_val_cap_float(cvector_float* vec, float val);
-
-float* cvec_back_float(cvector_float* vec);
-
-void cvec_clear_float(cvector_float* vec);
-void cvec_free_float_heap(void* vec);
-void cvec_free_float(void* vec);
-
 
 
 
 #include <stdint.h>
+
+// References
+// https://www.khronos.org/opengl/wiki/OpenGL_Type
+// https://registry.khronos.org/EGL/api/KHR/khrplatform.h
+// https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml
+//
+// NOTES:
+// Non-negative is not the same as unsigned
+// They use plain int for GLsizei not unsigned like you'd think hence all
+// the GL_INVALID_VALUE errors when a GLsizei param is < 0
+// Similarly, according to these links, GLsizeiptr is signed
+//
+// Also, there are some minor/rare contradictions in the links above. They use
+// plain int for GLint and GLsizei and unsigned int for GLbitfield but the first
+// link above insists all 3 must be 32-bits while the C standard only guarantees
+// an int (signed or unsigned) is *at least* 16-bits.  Obviously 16 bit
+// architectures are rare and it's probably impossible to run OpenGL on one for
+// other reasons, but still, why not use an int32_t/khronos_int32_t in the
+// official registry?
 
 typedef uint8_t   GLboolean;
 typedef char      GLchar;
@@ -2047,18 +2344,13 @@ typedef uint32_t  GLuint;
 typedef int64_t   GLint64;
 typedef uint64_t  GLuint64;
 
-//they use plain int not unsigned like you'd think
-// TODO(rswinkle) just use uint32_t, remove all checks for < 0 and
-// use for all offset/index type parameters (other than
-// VertexAttribPointer because I already folded on that and have
-// the pgl macro wrapper)
 typedef int32_t   GLsizei;
 
-typedef int32_t   GLenum;
-typedef int32_t   GLbitfield;
+typedef uint32_t  GLenum;
+typedef uint32_t  GLbitfield;
 
 typedef intptr_t  GLintptr;
-typedef uintptr_t GLsizeiptr;
+typedef intptr_t  GLsizeiptr;
 typedef void      GLvoid;
 
 typedef float     GLfloat;
@@ -2068,7 +2360,7 @@ typedef float     GLclampf;
 typedef double    GLdouble;
 typedef double    GLclampd;
 
-
+#define PGL_UNUSED(var) (void)(var)
 
 enum
 {
@@ -2367,6 +2659,12 @@ enum
 	GL_POLYGON_OFFSET_FACTOR,
 	GL_POLYGON_OFFSET_UNITS,
 	GL_POINT_SIZE,
+
+	GL_LINE_WIDTH,
+	GL_ALIASED_LINE_WIDTH_RANGE,
+	GL_SMOOTH_LINE_WIDTH_RANGE,
+	GL_SMOOTH_LINE_WIDTH_GRANULARITY,
+
 	GL_DEPTH_CLEAR_VALUE,
 	GL_DEPTH_RANGE,
 	GL_STENCIL_WRITE_MASK,
@@ -2427,6 +2725,40 @@ enum
 	GL_VIEWPORT,
 	GL_SCISSOR_BOX,
 
+	GL_MAX_TEXTURE_BUFFER_SIZE,
+	GL_MAX_TEXTURE_IMAGE_UNITS,
+	GL_MAX_TEXTURE_LOD_BIAS,
+	GL_MAX_TEXTURE_SIZE,
+	GL_MAX_3D_TEXTURE_SIZE,
+	GL_MAX_ARRAY_TEXTURE_LAYERS,
+
+	// glDebugOutput
+	GL_DEBUG_OUTPUT,
+
+	GL_DEBUG_SOURCE_API,
+	GL_DEBUG_SOURCE_SHADER_COMPILER,
+	GL_DEBUG_SOURCE_WINDOW_SYSTEM,
+	GL_DEBUG_SOURCE_THIRD_PARTY,
+	GL_DEBUG_SOURCE_APPLICATION,
+	GL_DEBUG_SOURCE_OTHER,
+
+	GL_DEBUG_TYPE_ERROR,
+	GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR,
+	GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR,
+	GL_DEBUG_TYPE_PERFORMANCE,
+	GL_DEBUG_TYPE_PORTABILITY,
+	GL_DEBUG_TYPE_MARKER,
+	GL_DEBUG_TYPE_PUSH_GROUP,
+	GL_DEBUG_TYPE_POP_GROUP,
+	GL_DEBUG_TYPE_OTHER,
+
+	GL_DEBUG_SEVERITY_HIGH,
+	GL_DEBUG_SEVERITY_MEDIUM,
+	GL_DEBUG_SEVERITY_LOW,
+	GL_DEBUG_SEVERITY_NOTIFICATION,
+
+	GL_MAX_DEBUG_MESSAGE_LENGTH,
+
 	//shader types etc. not used, just here for compatibility add what you
 	//need so you can use your OpenGL code with PortableGL with minimal changes
 	GL_COMPUTE_SHADER,
@@ -2457,15 +2789,42 @@ enum
 #define PGL_STENCIL_MASK 0xFF
 
 
-
 // Feel free to change these
-#define PGL_MAX_VERTICES 500000
+#ifdef PGL_TINY_MEM
+// 80 KB
+#define GL_MAX_VERTEX_ATTRIBS 4
+#define PGL_MAX_VERTICES 5000
+#elif defined(PGL_SMALL_MEM)
+// 800 KB
+#define GL_MAX_VERTEX_ATTRIBS 4
+#define PGL_MAX_VERTICES 50000
+#elif defined(PGL_MED_MEM)
+//1.6 MB
+#define GL_MAX_VERTEX_ATTRIBS 4
+#define PGL_MAX_VERTICES 100000
+#else
+// 16 MB
 #define GL_MAX_VERTEX_ATTRIBS 8
+#define PGL_MAX_VERTICES 500000
+#endif
+
+
 #define GL_MAX_VERTEX_OUTPUT_COMPONENTS (4*GL_MAX_VERTEX_ATTRIBS)
+
+// Mostly arbitrarily chosen, some match my AMD/Mesa output, some not really used
 #define GL_MAX_DRAW_BUFFERS 4
 #define GL_MAX_COLOR_ATTACHMENTS 4
 
-//TODO use prefix like GL_SMOOTH?  PGL_SMOOTH?
+#define PGL_MAX_ALIASED_WIDTH 2048.0f
+#define PGL_MAX_TEXTURE_SIZE 16384
+#define PGL_MAX_3D_TEXTURE_SIZE 8192
+#define PGL_MAX_ARRAY_TEXTURE_LAYERS 8192
+#define PGL_MAX_DEBUG_MESSAGE_LENGTH 256
+
+// TODO for now I only support smooth AA lines width 1, so granularity is meaningless
+#define PGL_MAX_SMOOTH_WIDTH 1.0f
+#define PGL_SMOOTH_GRANULARITY 1.0f
+
 enum { PGL_SMOOTH, PGL_FLAT, PGL_NOPERSPECTIVE };
 
 #define PGL_SMOOTH2 PGL_SMOOTH, PGL_SMOOTH
@@ -2516,6 +2875,8 @@ typedef struct Shader_Builtins
 typedef void (*vert_func)(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms);
 typedef void (*frag_func)(float* fs_input, Shader_Builtins* builtins, void* uniforms);
 
+typedef void (*GLDEBUGPROC)(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam);
+
 typedef struct glProgram
 {
 	vert_func vertex_shader;
@@ -2565,22 +2926,14 @@ typedef struct glVertex_Attrib
 	GLuint divisor;
 } glVertex_Attrib;
 
-void init_glVertex_Attrib(glVertex_Attrib* v);
-//void init_glVertex_Attrib(glVertex_Attrib* v, GLint size, GLenum type, GLsizei stride, GLsizei offset, GLboolean normalized, Buffer* buf);
-
-
 typedef struct glVertex_Array
 {
 	glVertex_Attrib vertex_attribs[GL_MAX_VERTEX_ATTRIBS];
 
-	//GLuint n_array_bufs;
 	GLuint element_buffer;
 	GLboolean deleted;
 
 } glVertex_Array;
-
-void init_glVertex_Array(glVertex_Array* v);
-
 
 typedef struct glTexture
 {
@@ -2638,7 +2991,7 @@ typedef struct Vertex_Shader_output
 	// but still easily add back functions as needed...
 	//
 	// or like comment in init_glContext says just allocate to the max size and be done
-	cvector_float output_buf;
+	float* output_buf;
 } Vertex_Shader_output;
 
 
@@ -2889,6 +3242,10 @@ typedef struct glContext
 	GLuint cur_program;
 
 	GLenum error;
+	GLDEBUGPROC dbg_callback;
+	GLchar dbg_msg_buf[PGL_MAX_DEBUG_MESSAGE_LENGTH];
+	void* dbg_userparam;
+	GLboolean dbg_output;
 
 	// TODO make some or all of these locals, measure performance
 	// impact. Would be necessary in the long term if I ever
@@ -2911,8 +3268,9 @@ typedef struct glContext
 	GLboolean poly_offset_fill;
 	GLboolean scissor_test;
 
-	// stencil test requires a lot of state, especially for
-	// something that I think will rarely be used... is it even worth having?
+	pix_t color_mask;
+
+#ifndef PGL_NO_STENCIL
 	GLboolean stencil_test;
 	GLuint stencil_writemask;
 	GLuint stencil_writemask_back;
@@ -2929,6 +3287,10 @@ typedef struct glContext
 	GLenum stencil_dpfail_back;
 	GLenum stencil_dppass_back;
 
+	GLint clear_stencil;
+	glFramebuffer stencil_buf;
+#endif
+
 	GLenum logic_func;
 	GLenum blend_sRGB;
 	GLenum blend_sA;
@@ -2944,7 +3306,6 @@ typedef struct glContext
 	GLenum point_spr_origin;
 	GLenum provoking_vert;
 
-	// I really need to decide whether to use GLtypes or plain C types
 	GLfloat poly_factor;
 	GLfloat poly_units;
 
@@ -2956,12 +3317,12 @@ typedef struct glContext
 	GLint unpack_alignment;
 	GLint pack_alignment;
 
-	GLint clear_stencil;
-	Color clear_color;
+	pix_t clear_color;
 	vec4 blend_color;
 	GLfloat point_size;
 	GLfloat line_width;
 	GLfloat clear_depth;
+	//GLuint clear_depth;
 	GLfloat depth_range_near;
 	GLfloat depth_range_far;
 
@@ -2970,20 +3331,8 @@ typedef struct glContext
 
 	glFramebuffer zbuf;
 	glFramebuffer back_buffer;
-	glFramebuffer stencil_buf;
 
 	int user_alloced_backbuf;
-	int bitdepth;
-	u32 Rmask;
-	u32 Gmask;
-	u32 Bmask;
-	u32 Amask;
-	int Rshift;
-	int Gshift;
-	int Bshift;
-	int Ashift;
-	
-
 
 	cvector_glVertex glverts;
 } glContext;
@@ -3004,12 +3353,12 @@ typedef struct glContext
 //int clampi(int i, int min, int max);
 
 //shader texture functions
-vec4 texture1D(GLuint tex, float x);
-vec4 texture2D(GLuint tex, float x, float y);
-vec4 texture3D(GLuint tex, float x, float y, float z);
-vec4 texture2DArray(GLuint tex, float x, float y, int z);
-vec4 texture_rect(GLuint tex, float x, float y);
-vec4 texture_cubemap(GLuint texture, float x, float y, float z);
+PGLDEF vec4 texture1D(GLuint tex, float x);
+PGLDEF vec4 texture2D(GLuint tex, float x, float y);
+PGLDEF vec4 texture3D(GLuint tex, float x, float y, float z);
+PGLDEF vec4 texture2DArray(GLuint tex, float x, float y, int z);
+PGLDEF vec4 texture_rect(GLuint tex, float x, float y);
+PGLDEF vec4 texture_cubemap(GLuint texture, float x, float y, float z);
 
 
 
@@ -3057,214 +3406,299 @@ enum {
 	PGL_NUM_SHADERS
 };
 
-void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS]);
+PGLDEF void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS]);
 
 
 // TODO leave these non gl* functions here?  prefix with pgl?
-int init_glContext(glContext* c, u32** back_buffer, int w, int h, int bitdepth, u32 Rmask, u32 Gmask, u32 Bmask, u32 Amask);
-void free_glContext(glContext* context);
-void set_glContext(glContext* context);
+PGLDEF GLboolean init_glContext(glContext* c, pix_t** back_buffer, GLsizei w, GLsizei h);
+PGLDEF void free_glContext(glContext* context);
+PGLDEF void set_glContext(glContext* context);
 
-void* pglResizeFramebuffer(size_t w, size_t h);
+PGLDEF GLboolean pglResizeFramebuffer(GLsizei w, GLsizei h);
 
-void glViewport(int x, int y, GLsizei width, GLsizei height);
+PGLDEF void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+
+PGLDEF void glDebugMessageCallback(GLDEBUGPROC callback, void* userParam);
+
+PGLDEF GLubyte* glGetString(GLenum name);
+PGLDEF GLenum glGetError(void);
+PGLDEF void glGetBooleanv(GLenum pname, GLboolean* data);
+PGLDEF void glGetFloatv(GLenum pname, GLfloat* data);
+PGLDEF void glGetIntegerv(GLenum pname, GLint* data);
+PGLDEF GLboolean glIsEnabled(GLenum cap);
+PGLDEF GLboolean glIsProgram(GLuint program);
+
+PGLDEF void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
+PGLDEF void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+PGLDEF void glClearDepthf(GLfloat depth);
+PGLDEF void glClearDepth(GLdouble depth);
+PGLDEF void glDepthFunc(GLenum func);
+PGLDEF void glDepthRangef(GLfloat nearVal, GLfloat farVal);
+PGLDEF void glDepthRange(GLdouble nearVal, GLdouble farVal);
+PGLDEF void glDepthMask(GLboolean flag);
+PGLDEF void glBlendFunc(GLenum sfactor, GLenum dfactor);
+PGLDEF void glBlendEquation(GLenum mode);
+PGLDEF void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
+PGLDEF void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
+PGLDEF void glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+PGLDEF void glClear(GLbitfield mask);
+PGLDEF void glProvokingVertex(GLenum provokeMode);
+PGLDEF void glEnable(GLenum cap);
+PGLDEF void glDisable(GLenum cap);
+PGLDEF void glCullFace(GLenum mode);
+PGLDEF void glFrontFace(GLenum mode);
+PGLDEF void glPolygonMode(GLenum face, GLenum mode);
+PGLDEF void glPointSize(GLfloat size);
+PGLDEF void glPointParameteri(GLenum pname, GLint param);
+PGLDEF void glLineWidth(GLfloat width);
+PGLDEF void glLogicOp(GLenum opcode);
+PGLDEF void glPolygonOffset(GLfloat factor, GLfloat units);
+PGLDEF void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
+#ifndef PGL_NO_STENCIL
+PGLDEF void glStencilFunc(GLenum func, GLint ref, GLuint mask);
+PGLDEF void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
+PGLDEF void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass);
+PGLDEF void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass);
+PGLDEF void glClearStencil(GLint s);
+PGLDEF void glStencilMask(GLuint mask);
+PGLDEF void glStencilMaskSeparate(GLenum face, GLuint mask);
+#endif
+
+// textures
+PGLDEF void glGenTextures(GLsizei n, GLuint* textures);
+PGLDEF void glDeleteTextures(GLsizei n, const GLuint* textures);
+PGLDEF void glBindTexture(GLenum target, GLuint texture);
+
+PGLDEF void glTexParameteri(GLenum target, GLenum pname, GLint param);
+PGLDEF void glTextureParameteri(GLuint texture, GLenum pname, GLint param);
+PGLDEF void glPixelStorei(GLenum pname, GLint param);
+PGLDEF void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data);
+
+PGLDEF void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid* data);
 
 
-GLubyte* glGetString(GLenum name);
-GLenum glGetError();
-void glGetBooleanv(GLenum pname, GLboolean* data);
-void glGetFloatv(GLenum pname, GLfloat* data);
-void glGetIntegerv(GLenum pname, GLint* data);
-GLboolean glIsEnabled(GLenum cap);
-GLboolean glIsProgram(GLuint program);
-
-void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
-void glClearDepth(GLclampf depth);
-void glDepthFunc(GLenum func);
-void glDepthRange(GLclampf nearVal, GLclampf farVal);
-void glDepthMask(GLboolean flag);
-void glBlendFunc(GLenum sfactor, GLenum dfactor);
-void glBlendEquation(GLenum mode);
-void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
-void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
-void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
-void glClear(GLbitfield mask);
-void glProvokingVertex(GLenum provokeMode);
-void glEnable(GLenum cap);
-void glDisable(GLenum cap);
-void glCullFace(GLenum mode);
-void glFrontFace(GLenum mode);
-void glPolygonMode(GLenum face, GLenum mode);
-void glPointSize(GLfloat size);
-void glPointParameteri(GLenum pname, GLint param);
-void glLineWidth(GLfloat width);
-void glLogicOp(GLenum opcode);
-void glPolygonOffset(GLfloat factor, GLfloat units);
-void glScissor(GLint x, GLint y, GLsizei width, GLsizei height);
-void glStencilFunc(GLenum func, GLint ref, GLuint mask);
-void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask);
-void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass);
-void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass);
-void glClearStencil(GLint s);
-void glStencilMask(GLuint mask);
-void glStencilMaskSeparate(GLenum face, GLuint mask);
-
-//textures
-void glGenTextures(GLsizei n, GLuint* textures);
-void glDeleteTextures(GLsizei n, const GLuint* textures);
-void glBindTexture(GLenum target, GLuint texture);
-
-void glTexParameteri(GLenum target, GLenum pname, GLint param);
-void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params);
-void glTextureParameteri(GLuint texture, GLenum pname, GLint param);
-void glPixelStorei(GLenum pname, GLint param);
-void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
-void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
-void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data);
-
-void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid* data);
-void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* data);
-void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid* data);
-
-
-void glGenVertexArrays(GLsizei n, GLuint* arrays);
-void glDeleteVertexArrays(GLsizei n, const GLuint* arrays);
-void glBindVertexArray(GLuint array);
-void glGenBuffers(GLsizei n, GLuint* buffers);
-void glDeleteBuffers(GLsizei n, const GLuint* buffers);
-void glBindBuffer(GLenum target, GLuint buffer);
-void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
-void glBufferSubData(GLenum target, GLsizei offset, GLsizei size, const GLvoid* data);
-void* glMapBuffer(GLenum target, GLenum access);
-void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer);
-void glVertexAttribDivisor(GLuint index, GLuint divisor);
-void glEnableVertexAttribArray(GLuint index);
-void glDisableVertexAttribArray(GLuint index);
-void glDrawArrays(GLenum mode, GLint first, GLsizei count);
-void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
-void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices);
-void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices, GLsizei drawcount);
-void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei primcount);
-void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei primcount, GLuint baseinstance);
-void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei primcount);
-void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei primcount, GLuint baseinstance);
+PGLDEF void glGenVertexArrays(GLsizei n, GLuint* arrays);
+PGLDEF void glDeleteVertexArrays(GLsizei n, const GLuint* arrays);
+PGLDEF void glBindVertexArray(GLuint array);
+PGLDEF void glGenBuffers(GLsizei n, GLuint* buffers);
+PGLDEF void glDeleteBuffers(GLsizei n, const GLuint* buffers);
+PGLDEF void glBindBuffer(GLenum target, GLuint buffer);
+PGLDEF void glBufferData(GLenum target, GLsizeiptr size, const GLvoid* data, GLenum usage);
+PGLDEF void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid* data);
+PGLDEF void* glMapBuffer(GLenum target, GLenum access);
+PGLDEF void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer);
+PGLDEF void glVertexAttribDivisor(GLuint index, GLuint divisor);
+PGLDEF void glEnableVertexAttribArray(GLuint index);
+PGLDEF void glDisableVertexAttribArray(GLuint index);
+PGLDEF void glDrawArrays(GLenum mode, GLint first, GLsizei count);
+PGLDEF void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
+PGLDEF void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices);
+PGLDEF void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices, GLsizei drawcount);
+PGLDEF void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei primcount);
+PGLDEF void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei primcount, GLuint baseinstance);
+PGLDEF void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei primcount);
+PGLDEF void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei primcount, GLuint baseinstance);
 
 //DSA functions (from OpenGL 4.5+)
 #define glCreateBuffers(n, buffers) glGenBuffers(n, buffers)
-void glNamedBufferData(GLuint buffer, GLsizei size, const GLvoid* data, GLenum usage);
-void glNamedBufferSubData(GLuint buffer, GLsizei offset, GLsizei size, const GLvoid* data);
-void* glMapNamedBuffer(GLuint buffer, GLenum access);
-void glCreateTextures(GLenum target, GLsizei n, GLuint* textures);
+PGLDEF void glNamedBufferData(GLuint buffer, GLsizeiptr size, const GLvoid* data, GLenum usage);
+PGLDEF void glNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, const GLvoid* data);
+PGLDEF void* glMapNamedBuffer(GLuint buffer, GLenum access);
+PGLDEF void glCreateTextures(GLenum target, GLsizei n, GLuint* textures);
+
+PGLDEF void glEnableVertexArrayAttrib(GLuint vaobj, GLuint index);
+PGLDEF void glDisableVertexArrayAttrib(GLuint vaobj, GLuint index);
 
 
 //shaders
-GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard);
-void glDeleteProgram(GLuint program);
-void glUseProgram(GLuint program);
+PGLDEF GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard);
+PGLDEF void glDeleteProgram(GLuint program);
+PGLDEF void glUseProgram(GLuint program);
 
-void pglSetUniform(void* uniform);
+// These are here, not in pgl_ext.h/c because they take the place of standard OpenGL
+// functions glUniform*() and glProgramUniform*()
+PGLDEF void pglSetUniform(void* uniform);
+PGLDEF void pglSetProgramUniform(GLuint program, void* uniform);
 
 
+
+#ifndef PGL_EXCLUDE_STUBS
 
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
+//
+PGLDEF const GLubyte* glGetStringi(GLenum name, GLuint index);
 
-void glGenerateMipmap(GLenum target);
-void glActiveTexture(GLenum texture);
+PGLDEF void glColorMaski(GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha);
 
-void glGetDoublev(GLenum pname, GLdouble* params);
-void glGetInteger64v(GLenum pname, GLint64* params);
+PGLDEF void glGenerateMipmap(GLenum target);
+PGLDEF void glActiveTexture(GLenum texture);
+
+PGLDEF void glTexParameterf(GLenum target, GLenum pname, GLfloat param);
+PGLDEF void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params);
+PGLDEF void glTexParameteriv(GLenum target, GLenum pname, const GLint* params);
+
+PGLDEF void glTextureParameterf(GLuint texture, GLenum pname, GLfloat param);
+PGLDEF void glTextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params);
+PGLDEF void glTextureParameteriv(GLuint texture, GLenum pname, const GLint* params);
+
+// TODO what the heck are these?
+PGLDEF void glTexParameterliv(GLenum target, GLenum pname, const GLint* params);
+PGLDEF void glTexParameterluiv(GLenum target, GLenum pname, const GLuint* params);
+
+PGLDEF void glTextureParameterliv(GLuint texture, GLenum pname, const GLint* params);
+PGLDEF void glTextureParameterluiv(GLuint texture, GLenum pname, const GLuint* params);
+
+PGLDEF void glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const GLvoid* data);
+PGLDEF void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const GLvoid* data);
+PGLDEF void glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const GLvoid* data);
+
+PGLDEF void glGetDoublev(GLenum pname, GLdouble* params);
+PGLDEF void glGetInteger64v(GLenum pname, GLint64* params);
+
+// Draw buffers
+PGLDEF void glDrawBuffers(GLsizei n, const GLenum* bufs);
+PGLDEF void glNamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs);
 
 // Framebuffers/Renderbuffers
-void glGenFramebuffers(GLsizei n, GLuint* ids);
-void glBindFramebuffer(GLenum target, GLuint framebuffer);
-void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers);
-void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level);
-void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer);
-GLboolean glIsFramebuffer(GLuint framebuffer);
+PGLDEF void glGenFramebuffers(GLsizei n, GLuint* ids);
+PGLDEF void glBindFramebuffer(GLenum target, GLuint framebuffer);
+PGLDEF void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers);
+PGLDEF void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level);
 
-void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers);
-void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
-void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers);
-void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+PGLDEF void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+PGLDEF void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+PGLDEF void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer);
+PGLDEF GLboolean glIsFramebuffer(GLuint framebuffer);
+
+PGLDEF void glFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer);
+PGLDEF void glNamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);
+
+PGLDEF void glReadBuffer(GLenum mode);
+PGLDEF void glNamedFramebufferReadBuffer(GLuint framebuffer, GLenum mode);
+
+PGLDEF void glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+PGLDEF void glBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+
+PGLDEF void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers);
+PGLDEF void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+PGLDEF void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers);
+PGLDEF void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
 GLboolean glIsRenderbuffer(GLuint renderbuffer);
-
-void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+PGLDEF void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
 GLenum glCheckFramebufferStatus(GLenum target);
 
+PGLDEF void glRenderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height);
+PGLDEF void glNamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height);
 
-void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
-void glGetProgramInfoLog(GLuint program, GLsizei maxLength, GLsizei* length, GLchar* infoLog);
-void glAttachShader(GLuint program, GLuint shader);
-void glCompileShader(GLuint shader);
-void glGetShaderInfoLog(GLuint shader, GLsizei maxLength, GLsizei* length, GLchar* infoLog);
+PGLDEF void glClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
+PGLDEF void glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
+PGLDEF void glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
+PGLDEF void glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+PGLDEF void glClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value);
+PGLDEF void glClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value);
+PGLDEF void glClearNamedFramebufferfv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLfloat* value);
+PGLDEF void glClearNamedFramebufferfi(GLuint framebuffer, GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+
+
+PGLDEF void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
+PGLDEF void glGetProgramInfoLog(GLuint program, GLsizei maxLength, GLsizei* length, GLchar* infoLog);
+PGLDEF void glAttachShader(GLuint program, GLuint shader);
+PGLDEF void glCompileShader(GLuint shader);
+PGLDEF void glGetShaderInfoLog(GLuint shader, GLsizei maxLength, GLsizei* length, GLchar* infoLog);
 
 // use pglCreateProgram()
-GLuint glCreateProgram();
+PGLDEF GLuint glCreateProgram(void);
 
-void glLinkProgram(GLuint program);
-void glShaderSource(GLuint shader, GLsizei count, const GLchar** string, const GLint* length);
-void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
-GLuint glCreateShader(GLenum shaderType);
-void glDeleteShader(GLuint shader);
-void glDetachShader(GLuint program, GLuint shader);
+PGLDEF void glLinkProgram(GLuint program);
+PGLDEF void glShaderSource(GLuint shader, GLsizei count, const GLchar** string, const GLint* length);
+PGLDEF void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
+PGLDEF GLuint glCreateShader(GLenum shaderType);
+PGLDEF void glDeleteShader(GLuint shader);
+PGLDEF void glDetachShader(GLuint program, GLuint shader);
 
-GLint glGetUniformLocation(GLuint program, const GLchar* name);
-GLint glGetAttribLocation(GLuint program, const GLchar* name);
+PGLDEF GLint glGetUniformLocation(GLuint program, const GLchar* name);
+PGLDEF GLint glGetAttribLocation(GLuint program, const GLchar* name);
 
-GLboolean glUnmapBuffer(GLenum target);
-GLboolean glUnmapNamedBuffer(GLuint buffer);
+PGLDEF GLboolean glUnmapBuffer(GLenum target);
+PGLDEF GLboolean glUnmapNamedBuffer(GLuint buffer);
 
-void glUniform1f(GLint location, GLfloat v0);
-void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
-void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
-void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+PGLDEF void glUniform1f(GLint location, GLfloat v0);
+PGLDEF void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
+PGLDEF void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+PGLDEF void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 
-void glUniform1i(GLint location, GLint v0);
-void glUniform2i(GLint location, GLint v0, GLint v1);
-void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2);
-void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3);
+PGLDEF void glUniform1i(GLint location, GLint v0);
+PGLDEF void glUniform2i(GLint location, GLint v0, GLint v1);
+PGLDEF void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2);
+PGLDEF void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3);
 
-void glUniform1ui(GLuint location, GLuint v0);
-void glUniform2ui(GLuint location, GLuint v0, GLuint v1);
-void glUniform3ui(GLuint location, GLuint v0, GLuint v1, GLuint v2);
-void glUniform4ui(GLuint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3);
+PGLDEF void glUniform1ui(GLint location, GLuint v0);
+PGLDEF void glUniform2ui(GLint location, GLuint v0, GLuint v1);
+PGLDEF void glUniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2);
+PGLDEF void glUniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3);
 
-void glUniform1fv(GLint location, GLsizei count, const GLfloat* value);
-void glUniform2fv(GLint location, GLsizei count, const GLfloat* value);
-void glUniform3fv(GLint location, GLsizei count, const GLfloat* value);
-void glUniform4fv(GLint location, GLsizei count, const GLfloat* value);
+PGLDEF void glUniform1fv(GLint location, GLsizei count, const GLfloat* value);
+PGLDEF void glUniform2fv(GLint location, GLsizei count, const GLfloat* value);
+PGLDEF void glUniform3fv(GLint location, GLsizei count, const GLfloat* value);
+PGLDEF void glUniform4fv(GLint location, GLsizei count, const GLfloat* value);
 
-void glUniform1iv(GLint location, GLsizei count, const GLint* value);
-void glUniform2iv(GLint location, GLsizei count, const GLint* value);
-void glUniform3iv(GLint location, GLsizei count, const GLint* value);
-void glUniform4iv(GLint location, GLsizei count, const GLint* value);
+PGLDEF void glUniform1iv(GLint location, GLsizei count, const GLint* value);
+PGLDEF void glUniform2iv(GLint location, GLsizei count, const GLint* value);
+PGLDEF void glUniform3iv(GLint location, GLsizei count, const GLint* value);
+PGLDEF void glUniform4iv(GLint location, GLsizei count, const GLint* value);
 
-void glUniform1uiv(GLint location, GLsizei count, const GLuint* value);
-void glUniform2uiv(GLint location, GLsizei count, const GLuint* value);
-void glUniform3uiv(GLint location, GLsizei count, const GLuint* value);
-void glUniform4uiv(GLint location, GLsizei count, const GLuint* value);
+PGLDEF void glUniform1uiv(GLint location, GLsizei count, const GLuint* value);
+PGLDEF void glUniform2uiv(GLint location, GLsizei count, const GLuint* value);
+PGLDEF void glUniform3uiv(GLint location, GLsizei count, const GLuint* value);
+PGLDEF void glUniform4uiv(GLint location, GLsizei count, const GLuint* value);
 
-void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
-void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+PGLDEF void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+
+#endif
 
 
+// Modeled after SDL for RenderGeometry
+// Color c like SDL or vec4 c?
+typedef struct pgl_vertex
+{
+	vec2 pos;
+	Color color;
+	vec2 tex_coord;
+} pgl_vertex;
 
 
-void pglClearScreen();
+// TODO use ints like SDL or keep floats?
+typedef struct pgl_fill_data
+{
+	vec2 dst;
+	Color c;
+} pgl_fill_data;
+
+typedef struct pgl_copy_data
+{
+	vec2 src;
+	vec2 dst;
+	Color c;
+} pgl_copy_data;
+
+PGLDEF void pglClearScreen(void);
 
 //This isn't possible in regular OpenGL, changing the interpolation of vs output of
 //an existing shader.  You'd have to switch between 2 almost identical shaders.
-void pglSetInterp(GLsizei n, GLenum* interpolation);
+PGLDEF void pglSetInterp(GLsizei n, GLenum* interpolation);
 
 #define pglVertexAttribPointer(index, size, type, normalized, stride, offset) \
 glVertexAttribPointer(index, size, type, normalized, stride, (void*)(offset))
@@ -3272,31 +3706,37 @@ glVertexAttribPointer(index, size, type, normalized, stride, (void*)(offset))
 //TODO
 //pglDrawRect(x, y, w, h)
 //pglDrawPoint(x, y)
-void pglDrawFrame();
+PGLDEF void pglDrawFrame(void);
 
 // TODO should these be called pglMapped* since that's what they do?  I don't think so, since it's too different from actual spec for mapped buffers
-void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
-void pglTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage);
+PGLDEF void pglTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data);
 
-void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void pglTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data);
 
-void pglTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data);
+PGLDEF void pglTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data);
 
 // I could make these return the data?
-void pglGetBufferData(GLuint buffer, GLvoid** data);
-void pglGetTextureData(GLuint texture, GLvoid** data);
+PGLDEF void pglGetBufferData(GLuint buffer, GLvoid** data);
+PGLDEF void pglGetTextureData(GLuint texture, GLvoid** data);
 
-u8* convert_format_to_packed_rgba(u8* output, u8* input, int w, int h, int pitch, GLenum format);
-u8* convert_grayscale_to_rgba(u8* input, int size, u32 bg_rgba, u32 text_rgba);
+PGLDEF u8* convert_format_to_packed_rgba(u8* output, u8* input, int w, int h, int pitch, GLenum format);
+PGLDEF u8* convert_grayscale_to_rgba(u8* input, int size, u32 bg_rgba, u32 text_rgba);
 
-void put_pixel(Color color, int x, int y);
+PGLDEF void put_pixel(Color color, int x, int y);
+PGLDEF void put_pixel_blend(vec4 src, int x, int y);
 
 //Should I have it take a glFramebuffer as paramater?
-void put_line(Color the_color, float x1, float y1, float x2, float y2);
-void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2);
-//void put_wide_line3(Color color1, Color color2, float width, float x1, float y1, float x2, float y2);
+PGLDEF void put_line(Color the_color, float x1, float y1, float x2, float y2);
+PGLDEF void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2);
+PGLDEF void put_wide_line(Color color1, Color color2, float width, float x1, float y1, float x2, float y2);
 
-void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
+PGLDEF void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
+PGLDEF void put_triangle_tex(int tex, vec2 uv1, vec2 uv2, vec2 uv3, vec2 p1, vec2 p2, vec2 p3);
+PGLDEF void pgl_draw_geometry_raw(int tex, const float* xy, int xy_stride, const Color* color, int color_stride, const float* uv, int uv_stride, int n_verts, const void* indices, int n_indices, int sz_indices);
+
+PGLDEF void put_aa_line(vec4 c, float x1, float y1, float x2, float y2);
+PGLDEF void put_aa_line_interp(vec4 c1, vec4 c2, float x1, float y1, float x2, float y2);
 
 
 #ifdef __cplusplus
@@ -3309,87 +3749,118 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3);
 #ifdef PORTABLEGL_IMPLEMENTATION
 
 
-
-extern inline float rsw_randf();
-extern inline float rsw_randf_range(float min, float max);
-extern inline double rsw_map(double x, double a, double b, double c, double d);
-extern inline float rsw_mapf(float x, float a, float b, float c, float d);
 extern inline vec2 make_vec2(float x, float y);
-extern inline vec3 make_vec3(float x, float y, float z);
-extern inline vec4 make_vec4(float x, float y, float z, float w);
-extern inline ivec2 make_ivec2(int x, int y);
-extern inline ivec3 make_ivec3(int x, int y, int z);
-extern inline ivec4 make_ivec4(int x, int y, int z, int w);
 extern inline vec2 negate_vec2(vec2 v);
-extern inline vec3 negate_vec3(vec3 v);
-extern inline vec4 negate_vec4(vec4 v);
 extern inline void fprint_vec2(FILE* f, vec2 v, const char* append);
-extern inline void fprint_vec3(FILE* f, vec3 v, const char* append);
-extern inline void fprint_vec4(FILE* f, vec4 v, const char* append);
 extern inline void print_vec2(vec2 v, const char* append);
-extern inline void print_vec3(vec3 v, const char* append);
-extern inline void print_vec4(vec4 v, const char* append);
 extern inline int fread_vec2(FILE* f, vec2* v);
+extern inline float length_vec2(vec2 a);
+extern inline vec2 norm_vec2(vec2 a);
+extern inline void normalize_vec2(vec2* a);
+extern inline vec2 add_vec2s(vec2 a, vec2 b);
+extern inline vec2 sub_vec2s(vec2 a, vec2 b);
+extern inline vec2 mult_vec2s(vec2 a, vec2 b);
+extern inline vec2 div_vec2s(vec2 a, vec2 b);
+extern inline float dot_vec2s(vec2 a, vec2 b);
+extern inline vec2 scale_vec2(vec2 a, float s);
+extern inline int equal_vec2s(vec2 a, vec2 b);
+extern inline int equal_epsilon_vec2s(vec2 a, vec2 b, float epsilon);
+extern inline float cross_vec2s(vec2 a, vec2 b);
+extern inline float angle_vec2s(vec2 a, vec2 b);
+
+
+extern inline vec3 make_vec3(float x, float y, float z);
+extern inline vec3 negate_vec3(vec3 v);
+extern inline void fprint_vec3(FILE* f, vec3 v, const char* append);
+extern inline void print_vec3(vec3 v, const char* append);
 extern inline int fread_vec3(FILE* f, vec3* v);
+extern inline float length_vec3(vec3 a);
+extern inline vec3 norm_vec3(vec3 a);
+extern inline void normalize_vec3(vec3* a);
+extern inline vec3 add_vec3s(vec3 a, vec3 b);
+extern inline vec3 sub_vec3s(vec3 a, vec3 b);
+extern inline vec3 mult_vec3s(vec3 a, vec3 b);
+extern inline vec3 div_vec3s(vec3 a, vec3 b);
+extern inline float dot_vec3s(vec3 a, vec3 b);
+extern inline vec3 scale_vec3(vec3 a, float s);
+extern inline int equal_vec3s(vec3 a, vec3 b);
+extern inline int equal_epsilon_vec3s(vec3 a, vec3 b, float epsilon);
+extern inline vec3 cross_vec3s(const vec3 u, const vec3 v);
+extern inline float angle_vec3s(const vec3 u, const vec3 v);
+
+
+extern inline vec4 make_vec4(float x, float y, float z, float w);
+extern inline vec4 negate_vec4(vec4 v);
+extern inline void fprint_vec4(FILE* f, vec4 v, const char* append);
+extern inline void print_vec4(vec4 v, const char* append);
 extern inline int fread_vec4(FILE* f, vec4* v);
+extern inline float length_vec4(vec4 a);
+extern inline vec4 norm_vec4(vec4 a);
+extern inline void normalize_vec4(vec4* a);
+extern inline vec4 add_vec4s(vec4 a, vec4 b);
+extern inline vec4 sub_vec4s(vec4 a, vec4 b);
+extern inline vec4 mult_vec4s(vec4 a, vec4 b);
+extern inline vec4 div_vec4s(vec4 a, vec4 b);
+extern inline float dot_vec4s(vec4 a, vec4 b);
+extern inline vec4 scale_vec4(vec4 a, float s);
+extern inline int equal_vec4s(vec4 a, vec4 b);
+extern inline int equal_epsilon_vec4s(vec4 a, vec4 b, float epsilon);
 
-extern inline void fprint_dvec2(FILE* f, dvec2 v, const char* append);
-extern inline void fprint_dvec3(FILE* f, dvec3 v, const char* append);
-extern inline void fprint_dvec4(FILE* f, dvec4 v, const char* append);
-extern inline int fread_dvec2(FILE* f, dvec2* v);
-extern inline int fread_dvec3(FILE* f, dvec3* v);
-extern inline int fread_dvec4(FILE* f, dvec4* v);
 
+extern inline ivec2 make_ivec2(int x, int y);
 extern inline void fprint_ivec2(FILE* f, ivec2 v, const char* append);
-extern inline void fprint_ivec3(FILE* f, ivec3 v, const char* append);
-extern inline void fprint_ivec4(FILE* f, ivec4 v, const char* append);
 extern inline int fread_ivec2(FILE* f, ivec2* v);
+
+extern inline ivec3 make_ivec3(int x, int y, int z);
+extern inline void fprint_ivec3(FILE* f, ivec3 v, const char* append);
 extern inline int fread_ivec3(FILE* f, ivec3* v);
+
+extern inline ivec4 make_ivec4(int x, int y, int z, int w);
+extern inline void fprint_ivec4(FILE* f, ivec4 v, const char* append);
 extern inline int fread_ivec4(FILE* f, ivec4* v);
 
+extern inline uvec2 make_uvec2(unsigned int x, unsigned int y);
 extern inline void fprint_uvec2(FILE* f, uvec2 v, const char* append);
-extern inline void fprint_uvec3(FILE* f, uvec3 v, const char* append);
-extern inline void fprint_uvec4(FILE* f, uvec4 v, const char* append);
 extern inline int fread_uvec2(FILE* f, uvec2* v);
+
+extern inline uvec3 make_uvec3(unsigned int x, unsigned int y, unsigned int z);
+extern inline void fprint_uvec3(FILE* f, uvec3 v, const char* append);
 extern inline int fread_uvec3(FILE* f, uvec3* v);
+
+extern inline uvec4 make_uvec4(unsigned int x, unsigned int y, unsigned int z, unsigned int w);
+extern inline void fprint_uvec4(FILE* f, uvec4 v, const char* append);
 extern inline int fread_uvec4(FILE* f, uvec4* v);
 
-extern inline float length_vec2(vec2 a);
-extern inline float length_vec3(vec3 a);
-extern inline vec2 norm_vec2(vec2 a);
-extern inline vec3 norm_vec3(vec3 a);
-extern inline void normalize_vec2(vec2* a);
-extern inline void normalize_vec3(vec3* a);
-extern inline vec2 add_vec2s(vec2 a, vec2 b);
-extern inline vec3 add_vec3s(vec3 a, vec3 b);
-extern inline vec4 add_vec4s(vec4 a, vec4 b);
-extern inline vec2 sub_vec2s(vec2 a, vec2 b);
-extern inline vec3 sub_vec3s(vec3 a, vec3 b);
-extern inline vec4 sub_vec4s(vec4 a, vec4 b);
-extern inline vec2 mult_vec2s(vec2 a, vec2 b);
-extern inline vec3 mult_vec3s(vec3 a, vec3 b);
-extern inline vec4 mult_vec4s(vec4 a, vec4 b);
-extern inline vec2 div_vec2s(vec2 a, vec2 b);
-extern inline vec3 div_vec3s(vec3 a, vec3 b);
-extern inline vec4 div_vec4s(vec4 a, vec4 b);
-extern inline float dot_vec2s(vec2 a, vec2 b);
-extern inline float dot_vec3s(vec3 a, vec3 b);
-extern inline float dot_vec4s(vec4 a, vec4 b);
-extern inline vec2 scale_vec2(vec2 a, float s);
-extern inline vec3 scale_vec3(vec3 a, float s);
-extern inline vec4 scale_vec4(vec4 a, float s);
-extern inline int equal_vec2s(vec2 a, vec2 b);
-extern inline int equal_vec3s(vec3 a, vec3 b);
-extern inline int equal_vec4s(vec4 a, vec4 b);
-extern inline int equal_epsilon_vec2s(vec2 a, vec2 b, float epsilon);
-extern inline int equal_epsilon_vec3s(vec3 a, vec3 b, float epsilon);
-extern inline int equal_epsilon_vec4s(vec4 a, vec4 b, float epsilon);
+extern inline bvec2 make_bvec2(int x, int y);
+extern inline void fprint_bvec2(FILE* f, bvec2 v, const char* append);
+extern inline int fread_bvec2(FILE* f, bvec2* v);
+
+extern inline bvec3 make_bvec3(int x, int y, int z);
+extern inline void fprint_bvec3(FILE* f, bvec3 v, const char* append);
+extern inline int fread_bvec3(FILE* f, bvec3* v);
+
+extern inline bvec4 make_bvec4(int x, int y, int z, int w);
+extern inline void fprint_bvec4(FILE* f, bvec4 v, const char* append);
+extern inline int fread_bvec4(FILE* f, bvec4* v);
+
 extern inline vec2 vec4_to_vec2(vec4 a);
 extern inline vec3 vec4_to_vec3(vec4 a);
 extern inline vec2 vec4_to_vec2h(vec4 a);
 extern inline vec3 vec4_to_vec3h(vec4 a);
-extern inline vec3 cross_product(const vec3 u, const vec3 v);
-extern inline float angle_between_vec3(const vec3 u, const vec3 v);
+
+extern inline void fprint_mat2(FILE* f, mat2 m, const char* append);
+extern inline void fprint_mat3(FILE* f, mat3 m, const char* append);
+extern inline void fprint_mat4(FILE* f, mat4 m, const char* append);
+extern inline void print_mat2(mat2 m, const char* append);
+extern inline void print_mat3(mat3 m, const char* append);
+extern inline void print_mat4(mat4 m, const char* append);
+extern inline vec2 mult_mat2_vec2(mat2 m, vec2 v);
+extern inline vec3 mult_mat3_vec3(mat3 m, vec3 v);
+extern inline vec4 mult_mat4_vec4(mat4 m, vec4 v);
+extern inline void scale_mat3(mat3 m, float x, float y, float z);
+extern inline void scale_mat4(mat4 m, float x, float y, float z);
+extern inline void translation_mat4(mat4 m, float x, float y, float z);
+extern inline void extract_rotation_mat4(mat3 dst, mat4 src, int normalize);
 
 extern inline vec2 x_mat2(mat2 m);
 extern inline vec2 y_mat2(mat2 m);
@@ -3415,7 +3886,6 @@ extern inline void setc3_mat3(mat3 m, vec3 v);
 extern inline void setx_mat3(mat3 m, vec3 v);
 extern inline void sety_mat3(mat3 m, vec3 v);
 extern inline void setz_mat3(mat3 m, vec3 v);
-
 
 extern inline vec4 c1_mat4(mat4 m);
 extern inline vec4 c2_mat4(mat4 m);
@@ -3446,34 +3916,6 @@ extern inline void setx_mat4v4(mat4 m, vec4 v);
 extern inline void sety_mat4v4(mat4 m, vec4 v);
 extern inline void setz_mat4v4(mat4 m, vec4 v);
 extern inline void setw_mat4v4(mat4 m, vec4 v);
-
-
-
-extern inline void fprint_mat2(FILE* f, mat2 m, const char* append);
-extern inline void fprint_mat3(FILE* f, mat3 m, const char* append);
-extern inline void fprint_mat4(FILE* f, mat4 m, const char* append);
-extern inline void print_mat2(mat2 m, const char* append);
-extern inline void print_mat3(mat3 m, const char* append);
-extern inline void print_mat4(mat4 m, const char* append);
-extern inline vec2 mult_mat2_vec2(mat2 m, vec2 v);
-extern inline vec3 mult_mat3_vec3(mat3 m, vec3 v);
-extern inline vec4 mult_mat4_vec4(mat4 m, vec4 v);
-extern inline void scale_mat3(mat3 m, float x, float y, float z);
-extern inline void scale_mat4(mat4 m, float x, float y, float z);
-extern inline void translation_mat4(mat4 m, float x, float y, float z);
-extern inline void extract_rotation_mat4(mat3 dst, mat4 src, int normalize);
-
-extern inline Color make_Color(u8 red, u8 green, u8 blue, u8 alpha);
-extern inline Color vec4_to_Color(vec4 v);
-extern inline void print_Color(Color c, const char* append);
-extern inline vec4 Color_to_vec4(Color c);
-extern inline Line make_Line(float x1, float y1, float x2, float y2);
-extern inline void normalize_line(Line* line);
-extern inline float line_func(Line* line, float x, float y);
-extern inline float line_findy(Line* line, float x);
-extern inline float line_findx(Line* line, float y);
-extern inline float sq_dist_pt_segment2d(vec2 a, vec2 b, vec2 c);
-
 
 
 void mult_mat2_mat2(mat2 c, mat2 a, mat2 b)
@@ -3692,7 +4134,6 @@ void load_rotation_mat4(mat4 mat, vec3 v, float angle)
 }
 
 
-
 /* TODO
 static float det_ij(const mat4 m, const int i, const int j)
 {
@@ -3745,8 +4186,6 @@ void invert_mat4(mat4 mInverse, const mat4& m)
 
 
 */
-
-
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -3870,8 +4309,6 @@ void make_viewport_matrix(mat4 mat, int x, int y, unsigned int width, unsigned i
 	}
 }
 
-
-
 //I can't really think of any reason to ever use this matrix alone.
 //You'd always do ortho * pers and really if you're doing perspective projection
 //just use make_perspective_matrix (or less likely make perspective_proj_matrix)
@@ -3925,8 +4362,6 @@ void make_pers_matrix(mat4 mat, float z_near, float z_far)
 	mat[15] = 0;
 #endif
 }
-
-
 
 // Create a projection matrix
 // Similiar to the old gluPerspective... fov is in radians btw...
@@ -3986,9 +4421,6 @@ void make_perspective_proj_matrix(mat4 mat, float l, float r, float b, float t, 
 #endif
 }
 
-
-
-
 //n and f really are near and far not min and max so if you want the standard looking down the -z axis
 // then n > f otherwise n < f
 void make_orthographic_matrix(mat4 mat, float l, float r, float b, float t, float n, float f)
@@ -4047,8 +4479,8 @@ void lookAt(mat4 mat, vec3 eye, vec3 center, vec3 up)
 	SET_IDENTITY_MAT4(mat);
 
 	vec3 f = norm_vec3(sub_vec3s(center, eye));
-	vec3 s = norm_vec3(cross_product(f, up));
-	vec3 u = cross_product(s, f);
+	vec3 s = norm_vec3(cross_vec3s(f, up));
+	vec3 u = cross_vec3s(s, f);
 
 	setx_mat4v3(mat, s);
 	sety_mat4v3(mat, u);
@@ -4056,6 +4488,23 @@ void lookAt(mat4 mat, vec3 eye, vec3 center, vec3 up)
 	setc4_mat4v3(mat, make_vec3(-dot_vec3s(s, eye), -dot_vec3s(u, eye), dot_vec3s(f, eye)));
 }
 
+extern inline float rsw_randf(void);
+extern inline float rsw_randf_range(float min, float max);
+extern inline double rsw_map(double x, double a, double b, double c, double d);
+extern inline float rsw_mapf(float x, float a, float b, float c, float d);
+
+extern inline Color make_Color(u8 red, u8 green, u8 blue, u8 alpha);
+extern inline Color vec4_to_Color(vec4 v);
+extern inline void print_Color(Color c, const char* append);
+extern inline vec4 Color_to_vec4(Color c);
+extern inline Line make_Line(float x1, float y1, float x2, float y2);
+extern inline void normalize_line(Line* line);
+extern inline float line_func(Line* line, float x, float y);
+extern inline float line_findy(Line* line, float x);
+extern inline float line_findx(Line* line, float y);
+extern inline float sq_dist_pt_segment2d(vec2 a, vec2 b, vec2 c);
+extern inline void closest_pt_pt_segment(vec2 c, vec2 a, vec2 b, float* t, vec2* d);
+extern inline float closest_pt_pt_segment_t(vec2 c, vec2 a, vec2 b);
 
 
 #if defined(CVEC_MALLOC) && defined(CVEC_FREE) && defined(CVEC_REALLOC)
@@ -5448,309 +5897,10 @@ void cvec_free_glVertex(void* vec)
 }
 
 
-#if defined(CVEC_MALLOC) && defined(CVEC_FREE) && defined(CVEC_REALLOC)
-/* ok */
-#elif !defined(CVEC_MALLOC) && !defined(CVEC_FREE) && !defined(CVEC_REALLOC)
-/* ok */
-#else
-#error "Must define all or none of CVEC_MALLOC, CVEC_FREE, and CVEC_REALLOC."
-#endif
-
-#ifndef CVEC_MALLOC
-#include <stdlib.h>
-#define CVEC_MALLOC(sz)      malloc(sz)
-#define CVEC_REALLOC(p, sz)  realloc(p, sz)
-#define CVEC_FREE(p)         free(p)
-#endif
-
-#ifndef CVEC_MEMMOVE
-#include <string.h>
-#define CVEC_MEMMOVE(dst, src, sz)  memmove(dst, src, sz)
-#endif
-
-#ifndef CVEC_ASSERT
-#include <assert.h>
-#define CVEC_ASSERT(x)       assert(x)
-#endif
-
-cvec_sz CVEC_float_SZ = 50;
-
-#define CVEC_float_ALLOCATOR(x) ((x+1) * 2)
-
-cvector_float* cvec_float_heap(cvec_sz size, cvec_sz capacity)
-{
-	cvector_float* vec;
-	if (!(vec = (cvector_float*)CVEC_MALLOC(sizeof(cvector_float)))) {
-		CVEC_ASSERT(vec != NULL);
-		return NULL;
-	}
-
-	vec->size = size;
-	vec->capacity = (capacity > vec->size || (vec->size && capacity == vec->size)) ? capacity : vec->size + CVEC_float_SZ;
-
-	if (!(vec->a = (float*)CVEC_MALLOC(vec->capacity*sizeof(float)))) {
-		CVEC_ASSERT(vec->a != NULL);
-		CVEC_FREE(vec);
-		return NULL;
-	}
-
-	return vec;
-}
-
-cvector_float* cvec_init_float_heap(float* vals, cvec_sz num)
-{
-	cvector_float* vec;
-	
-	if (!(vec = (cvector_float*)CVEC_MALLOC(sizeof(cvector_float)))) {
-		CVEC_ASSERT(vec != NULL);
-		return NULL;
-	}
-
-	vec->capacity = num + CVEC_float_SZ;
-	vec->size = num;
-	if (!(vec->a = (float*)CVEC_MALLOC(vec->capacity*sizeof(float)))) {
-		CVEC_ASSERT(vec->a != NULL);
-		CVEC_FREE(vec);
-		return NULL;
-	}
-
-	CVEC_MEMMOVE(vec->a, vals, sizeof(float)*num);
-
-	return vec;
-}
-
-int cvec_float(cvector_float* vec, cvec_sz size, cvec_sz capacity)
-{
-	vec->size = size;
-	vec->capacity = (capacity > vec->size || (vec->size && capacity == vec->size)) ? capacity : vec->size + CVEC_float_SZ;
-
-	if (!(vec->a = (float*)CVEC_MALLOC(vec->capacity*sizeof(float)))) {
-		CVEC_ASSERT(vec->a != NULL);
-		vec->size = vec->capacity = 0;
-		return 0;
-	}
-
-	return 1;
-}
-
-int cvec_init_float(cvector_float* vec, float* vals, cvec_sz num)
-{
-	vec->capacity = num + CVEC_float_SZ;
-	vec->size = num;
-	if (!(vec->a = (float*)CVEC_MALLOC(vec->capacity*sizeof(float)))) {
-		CVEC_ASSERT(vec->a != NULL);
-		vec->size = vec->capacity = 0;
-		return 0;
-	}
-
-	CVEC_MEMMOVE(vec->a, vals, sizeof(float)*num);
-
-	return 1;
-}
-
-int cvec_copyc_float(void* dest, void* src)
-{
-	cvector_float* vec1 = (cvector_float*)dest;
-	cvector_float* vec2 = (cvector_float*)src;
-
-	vec1->a = NULL;
-	vec1->size = 0;
-	vec1->capacity = 0;
-
-	return cvec_copy_float(vec1, vec2);
-}
-
-int cvec_copy_float(cvector_float* dest, cvector_float* src)
-{
-	float* tmp = NULL;
-	if (!(tmp = (float*)CVEC_REALLOC(dest->a, src->capacity*sizeof(float)))) {
-		CVEC_ASSERT(tmp != NULL);
-		return 0;
-	}
-	dest->a = tmp;
-
-	CVEC_MEMMOVE(dest->a, src->a, src->size*sizeof(float));
-	dest->size = src->size;
-	dest->capacity = src->capacity;
-	return 1;
-}
-
-
-int cvec_push_float(cvector_float* vec, float a)
-{
-	float* tmp;
-	cvec_sz tmp_sz;
-	if (vec->capacity > vec->size) {
-		vec->a[vec->size++] = a;
-	} else {
-		tmp_sz = CVEC_float_ALLOCATOR(vec->capacity);
-		if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*tmp_sz))) {
-			CVEC_ASSERT(tmp != NULL);
-			return 0;
-		}
-		vec->a = tmp;
-		vec->a[vec->size++] = a;
-		vec->capacity = tmp_sz;
-	}
-	return 1;
-}
-
-float cvec_pop_float(cvector_float* vec)
-{
-	return vec->a[--vec->size];
-}
-
-float* cvec_back_float(cvector_float* vec)
-{
-	return &vec->a[vec->size-1];
-}
-
-int cvec_extend_float(cvector_float* vec, cvec_sz num)
-{
-	float* tmp;
-	cvec_sz tmp_sz;
-	if (vec->capacity < vec->size + num) {
-		tmp_sz = vec->capacity + num + CVEC_float_SZ;
-		if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*tmp_sz))) {
-			CVEC_ASSERT(tmp != NULL);
-			return 0;
-		}
-		vec->a = tmp;
-		vec->capacity = tmp_sz;
-	}
-
-	vec->size += num;
-	return 1;
-}
-
-int cvec_insert_float(cvector_float* vec, cvec_sz i, float a)
-{
-	float* tmp;
-	cvec_sz tmp_sz;
-	if (vec->capacity > vec->size) {
-		CVEC_MEMMOVE(&vec->a[i+1], &vec->a[i], (vec->size-i)*sizeof(float));
-		vec->a[i] = a;
-	} else {
-		tmp_sz = CVEC_float_ALLOCATOR(vec->capacity);
-		if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*tmp_sz))) {
-			CVEC_ASSERT(tmp != NULL);
-			return 0;
-		}
-		vec->a = tmp;
-		CVEC_MEMMOVE(&vec->a[i+1], &vec->a[i], (vec->size-i)*sizeof(float));
-		vec->a[i] = a;
-		vec->capacity = tmp_sz;
-	}
-
-	vec->size++;
-	return 1;
-}
-
-int cvec_insert_array_float(cvector_float* vec, cvec_sz i, float* a, cvec_sz num)
-{
-	float* tmp;
-	cvec_sz tmp_sz;
-	if (vec->capacity < vec->size + num) {
-		tmp_sz = vec->capacity + num + CVEC_float_SZ;
-		if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*tmp_sz))) {
-			CVEC_ASSERT(tmp != NULL);
-			return 0;
-		}
-		vec->a = tmp;
-		vec->capacity = tmp_sz;
-	}
-
-	CVEC_MEMMOVE(&vec->a[i+num], &vec->a[i], (vec->size-i)*sizeof(float));
-	CVEC_MEMMOVE(&vec->a[i], a, num*sizeof(float));
-	vec->size += num;
-	return 1;
-}
-
-float cvec_replace_float(cvector_float* vec, cvec_sz i, float a)
-{
-	float tmp = vec->a[i];
-	vec->a[i] = a;
-	return tmp;
-}
-
-void cvec_erase_float(cvector_float* vec, cvec_sz start, cvec_sz end)
-{
-	cvec_sz d = end - start + 1;
-	CVEC_MEMMOVE(&vec->a[start], &vec->a[end+1], (vec->size-1-end)*sizeof(float));
-	vec->size -= d;
-}
-
-
-int cvec_reserve_float(cvector_float* vec, cvec_sz size)
-{
-	float* tmp;
-	if (vec->capacity < size) {
-		if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*(size+CVEC_float_SZ)))) {
-			CVEC_ASSERT(tmp != NULL);
-			return 0;
-		}
-		vec->a = tmp;
-		vec->capacity = size + CVEC_float_SZ;
-	}
-	return 1;
-}
-
-int cvec_set_cap_float(cvector_float* vec, cvec_sz size)
-{
-	float* tmp;
-	if (size < vec->size) {
-		vec->size = size;
-	}
-
-	if (!(tmp = (float*)CVEC_REALLOC(vec->a, sizeof(float)*size))) {
-		CVEC_ASSERT(tmp != NULL);
-		return 0;
-	}
-	vec->a = tmp;
-	vec->capacity = size;
-	return 1;
-}
-
-void cvec_set_val_sz_float(cvector_float* vec, float val)
-{
-	cvec_sz i;
-	for (i=0; i<vec->size; i++) {
-		vec->a[i] = val;
-	}
-}
-
-void cvec_set_val_cap_float(cvector_float* vec, float val)
-{
-	cvec_sz i;
-	for (i=0; i<vec->capacity; i++) {
-		vec->a[i] = val;
-	}
-}
-
-void cvec_clear_float(cvector_float* vec) { vec->size = 0; }
-
-void cvec_free_float_heap(void* vec)
-{
-	cvector_float* tmp = (cvector_float*)vec;
-	if (!tmp) return;
-	CVEC_FREE(tmp->a);
-	CVEC_FREE(tmp);
-}
-
-void cvec_free_float(void* vec)
-{
-	cvector_float* tmp = (cvector_float*)vec;
-	CVEC_FREE(tmp->a);
-	tmp->size = 0;
-	tmp->capacity = 0;
-}
-
-
 static glContext* c;
 
 static Color blend_pixel(vec4 src, vec4 dst);
 static int fragment_processing(int x, int y, float z);
-static void draw_pixel_vec2(vec4 cf, vec2 pos, float z);
 static void draw_pixel(vec4 cf, int x, int y, float z, int do_frag_processing);
 static void run_pipeline(GLenum mode, const GLvoid* indices, GLsizei count, GLsizei instance, GLuint base_instance, GLboolean use_elements);
 
@@ -5764,15 +5914,21 @@ static void draw_triangle_final(glVertex* v0, glVertex* v1, glVertex* v2, unsign
 static void draw_triangle(glVertex* v0, glVertex* v1, glVertex* v2, unsigned int provoke);
 
 static void draw_line_clip(glVertex* v1, glVertex* v2);
-static void draw_line_shader(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset);
-static void draw_thick_line_simple(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset);
+
+// This is the prototype for either implementation; only one is defined based on
+// whether PGL_BETTER_THICK_LINES is defined
 static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset);
+
+// Only width 1 supported for now
+static void draw_aa_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset);
 
 /* this clip epsilon is needed to avoid some rounding errors after
    several clipping stages */
 
 #define CLIP_EPSILON (1E-5)
 #define CLIPZ_MASK 0x3
+#define CLIPX_TEST(x) (x >= c->lx && x < c->ux)
+#define CLIPY_TEST(y) (y >= c->ly && y < c->uy)
 #define CLIPXY_TEST(x, y) (x >= c->lx && x < c->ux && y >= c->ly && y < c->uy)
 
 
@@ -5784,8 +5940,8 @@ static inline int gl_clipcode(vec4 pt)
 	return
 		(((pt.z < -w) |
 		 ((pt.z >  w) << 1)) &
-		 (!c->depth_clamp |
-		  !c->depth_clamp << 1)) |
+		 ((!c->depth_clamp) |
+		  (!c->depth_clamp) << 1)) |
 
 		((pt.x < -w) << 2) |
 		((pt.x >  w) << 3) |
@@ -5882,14 +6038,14 @@ static vec4 get_v_attrib(glVertex_Attrib* v, GLsizei i)
 
 // TODO Possibly split for optimization and future parallelization, prep all verts first then do all shader calls at once
 // Will need num_verts * vertex_attribs_vs[] space rather than a single attribute staging area...
-static void do_vertex(glVertex_Attrib* v, int* enabled, unsigned int num_enabled, unsigned int i, unsigned int vert)
+static void do_vertex(glVertex_Attrib* v, int* enabled, int num_enabled, int i, int vert)
 {
 	// copy/prep vertex attributes from buffers into appropriate positions for vertex shader to access
 	for (int j=0; j<num_enabled; ++j) {
 		c->vertex_attribs_vs[enabled[j]] = get_v_attrib(&v[enabled[j]], i);
 	}
 
-	float* vs_out = &c->vs_output.output_buf.a[vert*c->vs_output.size];
+	float* vs_out = &c->vs_output.output_buf[vert*c->vs_output.size];
 	c->programs.a[c->cur_program].vertex_shader(vs_out, c->vertex_attribs_vs, &c->builtins, c->programs.a[c->cur_program].uniform);
 
 	c->glverts.a[vert].vs_out = vs_out;
@@ -5915,7 +6071,7 @@ static void do_vertex(glVertex_Attrib* v, int* enabled, unsigned int num_enabled
 // so used as a boolean and an enum
 static void vertex_stage(const GLvoid* indices, GLsizei count, GLsizei instance_id, GLuint base_instance, GLenum use_elems_type)
 {
-	unsigned int i, j, vert, num_enabled;
+	int i, j, vert, num_enabled;
 
 	glVertex_Attrib* v = c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs;
 	GLuint elem_buffer = c->vertex_arrays.a[c->cur_vertex_array].element_buffer;
@@ -5990,10 +6146,9 @@ static void draw_point(glVertex* vert, float poly_offset)
 	//	clamp(point.z, c->depth_range_near, c->depth_range_far);
 
 	Shader_Builtins builtins;
-	// spec pg 110 r,q are supposed to be replaced with 0 and 1...but PointCoord is a vec2
-	// not worth making it a vec4 for something unlikely to be used
-	//builtins.gl_PointCoord.z = 0;
-	//builtins.gl_PointCoord.w = 1;
+	// 3.3 spec pg 110 says r,q are supposed to be replaced with 0 and 1...
+	// but PointCoord is a vec2 and that is not in the 4.6 spec so it must be a typo
+
 	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
 
 	//TODO why not just pass vs_output directly?  hmmm...
@@ -6109,7 +6264,7 @@ static void run_pipeline(GLenum mode, const GLvoid* indices, GLsizei count, GLsi
 }
 
 
-static int depthtest(float zval, float zbufval)
+static int depthtest(u32 zval, u32 zbufval)
 {
 	switch (c->depth_func) {
 	case GL_LESS:
@@ -6135,7 +6290,7 @@ static int depthtest(float zval, float zbufval)
 
 static void setup_fs_input(float t, float* v1_out, float* v2_out, float wa, float wb, unsigned int provoke)
 {
-	float* vs_output = &c->vs_output.output_buf.a[0];
+	float* vs_output = &c->vs_output.output_buf[0];
 
 	float inv_wa = 1.0/wa;
 	float inv_wb = 1.0/wb;
@@ -6224,10 +6379,10 @@ static void draw_line_clip(glVertex* v1, glVertex* v2)
 		hp1 = vec4_to_vec3h(t1);
 		hp2 = vec4_to_vec3h(t2);
 
-		if (c->line_width < 1.5f) {
-			draw_line_shader(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
+		if (c->line_smooth) {
+			draw_aa_line(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
 		} else {
-			DRAW_THICK_LINE(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
+			draw_thick_line(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
 		}
 	} else {
 
@@ -6257,377 +6412,16 @@ static void draw_line_clip(glVertex* v1, glVertex* v2)
 			hp1 = vec4_to_vec3h(t1);
 			hp2 = vec4_to_vec3h(t2);
 
-			if (c->line_width < 1.5f) {
-				draw_line_shader(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
+			if (c->line_smooth) {
+				draw_aa_line(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
 			} else {
-				DRAW_THICK_LINE(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
+				draw_thick_line(hp1, hp2, t1.w, t2.w, v1->vs_out, v2->vs_out, provoke, 0.0f);
 			}
 		}
 	}
 }
 
-
-static void draw_line_shader(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset)
-{
-	float tmp;
-	float* tmp_ptr;
-
-	//print_vec3(hp1, "\n");
-	//print_vec3(hp2, "\n");
-
-	float x1 = hp1.x, x2 = hp2.x, y1 = hp1.y, y2 = hp2.y;
-	float z1 = hp1.z, z2 = hp2.z;
-
-	//always draw from left to right
-	if (x2 < x1) {
-		tmp = x1;
-		x1 = x2;
-		x2 = tmp;
-		tmp = y1;
-		y1 = y2;
-		y2 = tmp;
-
-		tmp = z1;
-		z1 = z2;
-		z2 = tmp;
-
-		tmp = w1;
-		w1 = w2;
-		w2 = tmp;
-
-		tmp_ptr = v1_out;
-		v1_out = v2_out;
-		v2_out = tmp_ptr;
-	}
-
-	//calculate slope and implicit line parameters once
-	//could just use my Line type/constructor as in draw_triangle
-	float m = (y2-y1)/(x2-x1);
-	Line line = make_Line(x1, y1, x2, y2);
-
-	float t, x, y, z, w;
-
-	vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
-	vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
-	float line_length_squared = length_vec2(sub_p2p1);
-	line_length_squared *= line_length_squared;
-
-	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
-	void* uniform = c->programs.a[c->cur_program].uniform;
-	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
-
-	float i_x1, i_y1, i_x2, i_y2;
-	i_x1 = floor(p1.x) + 0.5;
-	i_y1 = floor(p1.y) + 0.5;
-	i_x2 = floor(p2.x) + 0.5;
-	i_y2 = floor(p2.y) + 0.5;
-
-	float x_min, x_max, y_min, y_max;
-	x_min = i_x1;
-	x_max = i_x2; //always left to right;
-	if (m <= 0) {
-		y_min = i_y2;
-		y_max = i_y1;
-	} else {
-		y_min = i_y1;
-		y_max = i_y2;
-	}
-
-	// TODO should be done for each fragment, after poly_offset is added?
-	z1 = rsw_mapf(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
-	z2 = rsw_mapf(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
-
-	//4 cases based on slope
-	if (m <= -1) {     //(-infinite, -1]
-		//printf("slope <= -1\n");
-		for (x = x_min, y = y_max; y>=y_min && x<=x_max; --y) {
-			if (CLIPXY_TEST(x, y)) {
-				pr.x = x;
-				pr.y = y;
-				t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-				z = (1 - t) * z1 + t * z2;
-				z += poly_offset;
-				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
-					w = (1 - t) * w1 + t * w2;
-
-					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
-					c->builtins.discard = GL_FALSE;
-					c->builtins.gl_FragDepth = z;
-					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-					fragment_shader(c->fs_input, &c->builtins, uniform);
-					if (!c->builtins.discard)
-						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-
-				}
-			}
-			if (line_func(&line, x+0.5f, y-1) < 0) //A*(x+0.5f) + B*(y-1) + C < 0)
-				++x;
-		}
-	} else if (m <= 0) {     //(-1, 0]
-		//printf("slope = (-1, 0]\n");
-		for (x = x_min, y = y_max; x<=x_max && y>=y_min; ++x) {
-			if (CLIPXY_TEST(x, y)) {
-				pr.x = x;
-				pr.y = y;
-				t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-				z = (1 - t) * z1 + t * z2;
-				z += poly_offset;
-				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
-					w = (1 - t) * w1 + t * w2;
-
-					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
-					c->builtins.discard = GL_FALSE;
-					c->builtins.gl_FragDepth = z;
-					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-					fragment_shader(c->fs_input, &c->builtins, uniform);
-					if (!c->builtins.discard)
-						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-				}
-			}
-			if (line_func(&line, x+1, y-0.5f) > 0) //A*(x+1) + B*(y-0.5f) + C > 0)
-				--y;
-		}
-	} else if (m <= 1) {     //(0, 1]
-		//printf("slope = (0, 1]\n");
-		for (x = x_min, y = y_min; x <= x_max && y <= y_max; ++x) {
-			if (CLIPXY_TEST(x, y)) {
-				pr.x = x;
-				pr.y = y;
-				t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-				z = (1 - t) * z1 + t * z2;
-				z += poly_offset;
-				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
-					w = (1 - t) * w1 + t * w2;
-
-					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
-					c->builtins.discard = GL_FALSE;
-					c->builtins.gl_FragDepth = z;
-					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-					fragment_shader(c->fs_input, &c->builtins, uniform);
-					if (!c->builtins.discard)
-						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-				}
-			}
-
-			if (line_func(&line, x+1, y+0.5f) < 0) //A*(x+1) + B*(y+0.5f) + C < 0)
-				++y;
-		}
-
-	} else {    //(1, +infinite)
-		//printf("slope > 1\n");
-		for (x = x_min, y = y_min; y<=y_max && x <= x_max; ++y) {
-			if (CLIPXY_TEST(x, y)) {
-				pr.x = x;
-				pr.y = y;
-				t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-				z = (1 - t) * z1 + t * z2;
-				z += poly_offset;
-				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
-					w = (1 - t) * w1 + t * w2;
-
-					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
-					c->builtins.discard = GL_FALSE;
-					c->builtins.gl_FragDepth = z;
-					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-					fragment_shader(c->fs_input, &c->builtins, uniform);
-					if (!c->builtins.discard)
-						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-				}
-			}
-
-			if (line_func(&line, x+0.5f, y+1) > 0) //A*(x+0.5f) + B*(y+1) + C > 0)
-				++x;
-		}
-	}
-}
-
-static void draw_thick_line_simple(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset)
-{
-	float tmp;
-	float* tmp_ptr;
-
-	//print_vec3(hp1, "\n");
-	//print_vec3(hp2, "\n");
-
-	float x1 = hp1.x, x2 = hp2.x, y1 = hp1.y, y2 = hp2.y;
-	float z1 = hp1.z, z2 = hp2.z;
-
-	//always draw from left to right
-	if (x2 < x1) {
-		tmp = x1;
-		x1 = x2;
-		x2 = tmp;
-		tmp = y1;
-		y1 = y2;
-		y2 = tmp;
-
-		tmp = z1;
-		z1 = z2;
-		z2 = tmp;
-
-		tmp = w1;
-		w1 = w2;
-		w2 = tmp;
-
-		tmp_ptr = v1_out;
-		v1_out = v2_out;
-		v2_out = tmp_ptr;
-	}
-
-	//calculate slope and implicit line parameters once
-	//could just use my Line type/constructor as in draw_triangle
-	float m = (y2-y1)/(x2-x1);
-	Line line = make_Line(x1, y1, x2, y2);
-
-	float t, x, y, z, w;
-
-	vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
-	vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
-	float line_length_squared = length_vec2(sub_p2p1);
-	line_length_squared *= line_length_squared;
-
-	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
-	void* uniform = c->programs.a[c->cur_program].uniform;
-	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
-
-	float i_x1, i_y1, i_x2, i_y2;
-	i_x1 = floor(p1.x) + 0.5;
-	i_y1 = floor(p1.y) + 0.5;
-	i_x2 = floor(p2.x) + 0.5;
-	i_y2 = floor(p2.y) + 0.5;
-
-	float x_min, x_max, y_min, y_max;
-	x_min = i_x1;
-	x_max = i_x2; //always left to right;
-	if (m <= 0) {
-		y_min = i_y2;
-		y_max = i_y1;
-	} else {
-		y_min = i_y1;
-		y_max = i_y2;
-	}
-
-	// TODO should be done for each fragment, after poly_offset is added?
-	z1 = rsw_mapf(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
-	z2 = rsw_mapf(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
-
-	float width = c->line_width;
-
-	//4 cases based on slope
-	if (m <= -1) {     //(-infinite, -1]
-		//printf("slope <= -1\n");
-		for (x = x_min, y = y_max; y>=y_min && x<=x_max; --y) {
-			pr.x = x;
-			pr.y = y;
-			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-			z = (1 - t) * z1 + t * z2;
-			z += poly_offset;
-			w = (1 - t) * w1 + t * w2;
-			for (float j=x-width/2; j<x+width/2; ++j) {
-				if (CLIPXY_TEST(j, y)) {
-					if (fragdepth_or_discard || fragment_processing(j, y, z)) {
-						SET_VEC4(c->builtins.gl_FragCoord, j, y, z, 1/w);
-						c->builtins.discard = GL_FALSE;
-						c->builtins.gl_FragDepth = z;
-						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-						fragment_shader(c->fs_input, &c->builtins, uniform);
-						if (!c->builtins.discard)
-							draw_pixel(c->builtins.gl_FragColor, j, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-					}
-				}
-			}
-			if (line_func(&line, x+0.5f, y-1) < 0) //A*(x+0.5f) + B*(y-1) + C < 0)
-				++x;
-		}
-	} else if (m <= 0) {     //(-1, 0]
-		//printf("slope = (-1, 0]\n");
-		for (x = x_min, y = y_max; x<=x_max && y>=y_min; ++x) {
-			pr.x = x;
-			pr.y = y;
-			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-			z = (1 - t) * z1 + t * z2;
-			z += poly_offset;
-			w = (1 - t) * w1 + t * w2;
-			for (float j=y-width/2; j<y+width/2; ++j) {
-				if (CLIPXY_TEST(x, j)) {
-					if (fragdepth_or_discard || fragment_processing(x, j, z)) {
-
-						SET_VEC4(c->builtins.gl_FragCoord, x, j, z, 1/w);
-						c->builtins.discard = GL_FALSE;
-						c->builtins.gl_FragDepth = z;
-						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-						fragment_shader(c->fs_input, &c->builtins, uniform);
-						if (!c->builtins.discard)
-							draw_pixel(c->builtins.gl_FragColor, x, j, c->builtins.gl_FragDepth, fragdepth_or_discard);
-					}
-				}
-			}
-			if (line_func(&line, x+1, y-0.5f) > 0) //A*(x+1) + B*(y-0.5f) + C > 0)
-				--y;
-		}
-	} else if (m <= 1) {     //(0, 1]
-		//printf("slope = (0, 1]\n");
-		for (x = x_min, y = y_min; x <= x_max && y <= y_max; ++x) {
-			pr.x = x;
-			pr.y = y;
-			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-			z = (1 - t) * z1 + t * z2;
-			z += poly_offset;
-			w = (1 - t) * w1 + t * w2;
-			for (float j=y-width/2; j<y+width/2; ++j) {
-				if (CLIPXY_TEST(x, j)) {
-					if (fragdepth_or_discard || fragment_processing(x, j, z)) {
-
-						SET_VEC4(c->builtins.gl_FragCoord, x, j, z, 1/w);
-						c->builtins.discard = GL_FALSE;
-						c->builtins.gl_FragDepth = z;
-						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-						fragment_shader(c->fs_input, &c->builtins, uniform);
-						if (!c->builtins.discard)
-							draw_pixel(c->builtins.gl_FragColor, x, j, c->builtins.gl_FragDepth, fragdepth_or_discard);
-					}
-				}
-			}
-			if (line_func(&line, x+1, y+0.5f) < 0) //A*(x+1) + B*(y+0.5f) + C < 0)
-				++y;
-		}
-
-	} else {    //(1, +infinite)
-		//printf("slope > 1\n");
-		for (x = x_min, y = y_min; y<=y_max && x <= x_max; ++y) {
-			pr.x = x;
-			pr.y = y;
-			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
-
-			z = (1 - t) * z1 + t * z2;
-			z += poly_offset;
-			w = (1 - t) * w1 + t * w2;
-			for (float j=x-width/2; j<x+width/2; ++j) {
-				if (CLIPXY_TEST(j, y)) {
-					if (fragdepth_or_discard || fragment_processing(j, y, z)) {
-
-						SET_VEC4(c->builtins.gl_FragCoord, j, y, z, 1/w);
-						c->builtins.discard = GL_FALSE;
-						c->builtins.gl_FragDepth = z;
-						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
-						fragment_shader(c->fs_input, &c->builtins, uniform);
-						if (!c->builtins.discard)
-							draw_pixel(c->builtins.gl_FragColor, j, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
-					}
-				}
-			}
-			if (line_func(&line, x+0.5f, y+1) > 0) //A*(x+0.5f) + B*(y+1) + C > 0)
-				++x;
-		}
-	}
-}
-
+#ifndef PGL_BETTER_THICK_LINES
 static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset)
 {
 	float tmp;
@@ -6658,7 +6452,219 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 		v2_out = tmp_ptr;
 	}
 
-	float width = c->line_width / 2.0f;
+	//calculate slope and implicit line parameters once
+	//could just use my Line type/constructor as in draw_triangle
+	float m = (y2-y1)/(x2-x1);
+	Line line = make_Line(x1, y1, x2, y2);
+
+	float t, x, y, z, w;
+
+	vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+	vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+	float line_length_squared = length_vec2(sub_p2p1);
+	line_length_squared *= line_length_squared;
+
+	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
+	void* uniform = c->programs.a[c->cur_program].uniform;
+	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
+
+	float i_x1, i_y1, i_x2, i_y2;
+	i_x1 = floor(p1.x) + 0.5;
+	i_y1 = floor(p1.y) + 0.5;
+	i_x2 = floor(p2.x) + 0.5;
+	i_y2 = floor(p2.y) + 0.5;
+
+	float x_min, x_max, y_min, y_max;
+	x_min = i_x1;
+	x_max = i_x2; //always left to right;
+	if (m <= 0) {
+		y_min = i_y2;
+		y_max = i_y1;
+	} else {
+		y_min = i_y1;
+		y_max = i_y2;
+	}
+
+	// TODO should be done for each fragment, after poly_offset is added?
+	z1 = rsw_mapf(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+	z2 = rsw_mapf(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+
+	float width = roundf(c->line_width);
+	if (!width) {
+		width = 1.0f;
+	}
+	//int wi = width;
+	float half_w = width * 0.5f;
+
+	// TODO solve off by one issues:
+	//   See test outputs where there seems to occasionally be an extra pixel
+	//   Also might be drawing lines one pixel lower on the minor axis
+	//
+	//   Also, I shouldn't have to clamp t, technically if it's outside [0,1]
+	//   it's not part of the line so it should be skipped or blended if the
+	//   pixel is partially covered and you're doing AA. Or mabye I do have to
+	//   clamp but be more particular about starting and ending pixel which..
+	//
+	// TODO I need to do anyway, since GL specifically says two lines which
+	// share an endpoint should *not* evaluate that pixel twice and which
+	// gets it should be deterministic
+	//
+	// TODO maybe try simplifying into only 2 cases steep or not steep like
+	// AA algorithm
+
+	//4 cases based on slope
+	if (m <= -1) {     //(-infinite, -1]
+		//printf("slope <= -1\n");
+		for (x = x_min, y = y_max; y>=y_min && x<=x_max; --y) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			t = clamp_01(t);
+
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			for (float j=x-half_w; j<x+half_w; ++j) {
+				if (CLIPXY_TEST(j, y)) {
+					if (fragdepth_or_discard || fragment_processing(j, y, z)) {
+						SET_VEC4(c->builtins.gl_FragCoord, j, y, z, 1/w);
+						c->builtins.discard = GL_FALSE;
+						c->builtins.gl_FragDepth = z;
+						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+						fragment_shader(c->fs_input, &c->builtins, uniform);
+						if (!c->builtins.discard)
+							draw_pixel(c->builtins.gl_FragColor, j, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+
+			if (line_func(&line, x+0.5f, y-1) < 0) //A*(x+0.5f) + B*(y-1) + C < 0)
+				++x;
+		}
+	} else if (m <= 0) {     //(-1, 0]
+		//printf("slope = (-1, 0]\n");
+		for (x = x_min, y = y_max; x<=x_max && y>=y_min; ++x) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			t = clamp_01(t);
+
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			for (float j=y-half_w; j<y+half_w; ++j) {
+				if (CLIPXY_TEST(x, j)) {
+					if (fragdepth_or_discard || fragment_processing(x, j, z)) {
+
+						SET_VEC4(c->builtins.gl_FragCoord, x, j, z, 1/w);
+						c->builtins.discard = GL_FALSE;
+						c->builtins.gl_FragDepth = z;
+						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+						fragment_shader(c->fs_input, &c->builtins, uniform);
+						if (!c->builtins.discard)
+							draw_pixel(c->builtins.gl_FragColor, x, j, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+			if (line_func(&line, x+1, y-0.5f) > 0) //A*(x+1) + B*(y-0.5f) + C > 0)
+				--y;
+		}
+	} else if (m <= 1) {     //(0, 1]
+		//printf("slope = (0, 1]\n");
+		for (x = x_min, y = y_min; x <= x_max && y <= y_max; ++x) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			t = clamp_01(t);
+
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			for (float j=y-half_w; j<y+half_w; ++j) {
+				if (CLIPXY_TEST(x, j)) {
+					if (fragdepth_or_discard || fragment_processing(x, j, z)) {
+
+						SET_VEC4(c->builtins.gl_FragCoord, x, j, z, 1/w);
+						c->builtins.discard = GL_FALSE;
+						c->builtins.gl_FragDepth = z;
+						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+						fragment_shader(c->fs_input, &c->builtins, uniform);
+						if (!c->builtins.discard)
+							draw_pixel(c->builtins.gl_FragColor, x, j, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+			if (line_func(&line, x+1, y+0.5f) < 0) //A*(x+1) + B*(y+0.5f) + C < 0)
+				++y;
+		}
+
+	} else {    //(1, +infinite)
+		//printf("slope > 1\n");
+		for (x = x_min, y = y_min; y<=y_max && x <= x_max; ++y) {
+			pr.x = x;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			t = clamp_01(t);
+
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			for (float j=x-half_w; j<x+half_w; ++j) {
+				if (CLIPXY_TEST(j, y)) {
+					if (fragdepth_or_discard || fragment_processing(j, y, z)) {
+
+						SET_VEC4(c->builtins.gl_FragCoord, j, y, z, 1/w);
+						c->builtins.discard = GL_FALSE;
+						c->builtins.gl_FragDepth = z;
+						setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+						fragment_shader(c->fs_input, &c->builtins, uniform);
+						if (!c->builtins.discard)
+							draw_pixel(c->builtins.gl_FragColor, j, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+			if (line_func(&line, x+0.5f, y+1) > 0) //A*(x+0.5f) + B*(y+1) + C > 0)
+				++x;
+		}
+	}
+}
+#else
+static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset)
+{
+	float tmp;
+	float* tmp_ptr;
+
+	float x1 = hp1.x, x2 = hp2.x, y1 = hp1.y, y2 = hp2.y;
+	float z1 = hp1.z, z2 = hp2.z;
+
+	//always draw from left to right
+	if (x2 < x1) {
+		tmp = x1;
+		x1 = x2;
+		x2 = tmp;
+		tmp = y1;
+		y1 = y2;
+		y2 = tmp;
+
+		tmp = z1;
+		z1 = z2;
+		z2 = tmp;
+
+		tmp = w1;
+		w1 = w2;
+		w2 = tmp;
+
+		tmp_ptr = v1_out;
+		v1_out = v2_out;
+		v2_out = tmp_ptr;
+	}
+
+	// Need half for the rest
+	float width = c->line_width * 0.5f;
 
 	//calculate slope and implicit line parameters once
 	float m = (y2-y1)/(x2-x1);
@@ -6668,7 +6674,7 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 	vec2 p1 = { x1, y1 };
 	vec2 p2 = { x2, y2 };
 	vec2 v12 = sub_vec2s(p2, p1);
-	vec2 v1r, v2r, pr;
+	vec2 v1r, pr; // v2r
 
 	float dot_1212 = dot_vec2s(v12, v12);
 
@@ -6702,7 +6708,7 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
 
 	float t, x, y, z, w, e, dist;
-	float width2 = width*width;
+	//float width_squared = width*width;
 
 	// calculate x_max or just use last logic?
 	//int last = 0;
@@ -6738,7 +6744,7 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 		for (x = x_min; x < x_max; ++x) {
 			pr.x = x;
 			v1r = sub_vec2s(pr, p1);
-			v2r = sub_vec2s(pr, p2);
+			//v2r = sub_vec2s(pr, p2);
 			e = dot_vec2s(v1r, v12);
 
 			// c lies past the ends of the segment v12
@@ -6749,10 +6755,10 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 			// can do this because we normalized the line equation
 			// TODO square or fabsf?
 			dist = line_func(&line, pr.x, pr.y);
-			//if (dist*dist < width2) {
+			//if (dist*dist < width_squared) {
 			if (fabsf(dist) < width) {
 				t = e / dot_1212;
-				
+
 				z = (1 - t) * z1 + t * z2;
 				z += poly_offset;
 				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
@@ -6774,6 +6780,322 @@ static void draw_thick_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_ou
 		}
 	}
 }
+#endif
+
+
+
+// As an adaptation of Xialin Wu's AA line algorithm, unlike all other GL
+// rasterization functions, this uses integer pixel centers and passes
+// those in glFragCoord.
+
+#define ipart_(X) ((int)(X))
+#define round_(X) ((int)(((float)(X))+0.5f))
+#define fpart_(X) (((float)(X))-(float)ipart_(X))
+#define rfpart_(X) (1.0f-fpart_(X))
+
+#define swap_(a, b) do{ __typeof__(a) tmp;  tmp = a; a = b; b = tmp; } while(0)
+static void draw_aa_line(vec3 hp1, vec3 hp2, float w1, float w2, float* v1_out, float* v2_out, unsigned int provoke, float poly_offset)
+{
+	float t, z, w;
+	int x, y;
+
+	frag_func fragment_shader = c->programs.a[c->cur_program].fragment_shader;
+	void* uniform = c->programs.a[c->cur_program].uniform;
+	int fragdepth_or_discard = c->programs.a[c->cur_program].fragdepth_or_discard;
+
+	float x1 = hp1.x, x2 = hp2.x, y1 = hp1.y, y2 = hp2.y;
+	float z1 = hp1.z, z2 = hp2.z;
+
+	float dx = x2 - x1;
+	float dy = y2 - y1;
+
+	if (fabsf(dx) > fabsf(dy)) {
+		if (x2 < x1) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+			swap_(z1, z2);
+			swap_(w1, w2);
+			swap_(v1_out, v2_out);
+		}
+
+		vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+		vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+		float line_length_squared = length_vec2(sub_p2p1);
+		line_length_squared *= line_length_squared;
+
+		// TODO should be done for each fragment, after poly_offset is added?
+		z1 = rsw_mapf(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+		z2 = rsw_mapf(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+
+		float gradient = dy / dx;
+		float xend = round_(x1);
+		float yend = y1 + gradient*(xend - x1);
+		float xgap = rfpart_(x1 + 0.5);
+		int xpxl1 = xend;
+		int ypxl1 = ipart_(yend);
+
+		t = 0.0f;
+		z = z1 + poly_offset;
+		w = w1;
+
+		// TODO This is so ugly and repetitive...Should I bother with end points?
+		// Or run the shader only once for each pair?
+		x = xpxl1;
+		y = ypxl1;
+		if (CLIPXY_TEST(x, y)) {
+			if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= rfpart_(yend)*xgap;
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+		if (CLIPXY_TEST(x, y+1)) {
+			if (fragdepth_or_discard || fragment_processing(x, y+1, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y+1, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= fpart_(yend)*xgap;
+					draw_pixel(c->builtins.gl_FragColor, x, y+1, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+		//printf("xgap = %f\n", xgap);
+		//printf("%f %f\n", rfpart_(yend), fpart_(yend));
+		//printf("%f %f\n", rfpart_(yend)*xgap, fpart_(yend)*xgap);
+		float intery = yend + gradient;
+
+		xend = round_(x2);
+		yend = y2 + gradient*(xend - x2);
+		xgap = fpart_(x2+0.5);
+		int xpxl2 = xend;
+		int ypxl2 = ipart_(yend);
+
+		t = 1.0f;
+		z = z2 + poly_offset;
+		w = w2;
+
+		x = xpxl2;
+		y = ypxl2;
+		if (CLIPXY_TEST(x, y)) {
+			if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= rfpart_(yend)*xgap;
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+		if (CLIPXY_TEST(x, y+1)) {
+			if (fragdepth_or_discard || fragment_processing(x, y+1, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y+1, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= fpart_(yend)*xgap;
+					draw_pixel(c->builtins.gl_FragColor, x, y+1, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+
+		for(x=xpxl1+1; x < xpxl2; x++) {
+			pr.x = x;
+			pr.y = intery;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			y = ipart_(intery);
+			if (CLIPXY_TEST(x, y)) {
+				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+					c->builtins.discard = GL_FALSE;
+					c->builtins.gl_FragDepth = z;
+					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+					fragment_shader(c->fs_input, &c->builtins, uniform);
+					if (!c->builtins.discard) {
+						c->builtins.gl_FragColor.w *= rfpart_(intery);
+						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+			if (CLIPXY_TEST(x, y+1)) {
+				if (fragdepth_or_discard || fragment_processing(x, y+1, z)) {
+					SET_VEC4(c->builtins.gl_FragCoord, x, y+1, z, 1/w);
+					c->builtins.discard = GL_FALSE;
+					c->builtins.gl_FragDepth = z;
+					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+					fragment_shader(c->fs_input, &c->builtins, uniform);
+					if (!c->builtins.discard) {
+						c->builtins.gl_FragColor.w *= fpart_(intery);
+						draw_pixel(c->builtins.gl_FragColor, x, y+1, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+
+			intery += gradient;
+		}
+	} else {
+		if (y2 < y1) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+			swap_(z1, z2);
+			swap_(w1, w2);
+			swap_(v1_out, v2_out);
+		}
+
+		vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+		vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+		float line_length_squared = length_vec2(sub_p2p1);
+		line_length_squared *= line_length_squared;
+
+		// TODO should be done for each fragment, after poly_offset is added?
+		z1 = rsw_mapf(z1, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+		z2 = rsw_mapf(z2, -1.0f, 1.0f, c->depth_range_near, c->depth_range_far);
+
+		float gradient = dx / dy;
+		float yend = round_(y1);
+		float xend = x1 + gradient*(yend - y1);
+		float ygap = rfpart_(y1 + 0.5);
+		int ypxl1 = yend;
+		int xpxl1 = ipart_(xend);
+
+		t = 0.0f;
+		z = z1 + poly_offset;
+		w = w1;
+
+		x = xpxl1;
+		y = ypxl1;
+		if (CLIPXY_TEST(x, y)) {
+			if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= rfpart_(xend)*ygap;
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+		if (CLIPXY_TEST(x+1, y)) {
+			if (fragdepth_or_discard || fragment_processing(x+1, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x+1, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= fpart_(xend)*ygap;
+					draw_pixel(c->builtins.gl_FragColor, x+1, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+
+		float interx = xend + gradient;
+
+		yend = round_(y2);
+		xend = x2 + gradient*(yend - y2);
+		ygap = fpart_(y2+0.5);
+		int ypxl2 = yend;
+		int xpxl2 = ipart_(xend);
+
+		t = 1.0f;
+		z = z2 + poly_offset;
+		w = w2;
+
+		x = xpxl2;
+		y = ypxl2;
+		if (CLIPXY_TEST(x, y)) {
+			if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= rfpart_(xend)*ygap;
+					draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+		if (CLIPXY_TEST(x+1, y)) {
+			if (fragdepth_or_discard || fragment_processing(x+1, y, z)) {
+				SET_VEC4(c->builtins.gl_FragCoord, x+1, y, z, 1/w);
+				c->builtins.discard = GL_FALSE;
+				c->builtins.gl_FragDepth = z;
+				setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+				fragment_shader(c->fs_input, &c->builtins, uniform);
+				if (!c->builtins.discard) {
+					c->builtins.gl_FragColor.w *= fpart_(xend)*ygap;
+					draw_pixel(c->builtins.gl_FragColor, x+1, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+				}
+			}
+		}
+
+		for(y=ypxl1+1; y < ypxl2; y++) {
+			pr.x = interx;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			z = (1 - t) * z1 + t * z2;
+			z += poly_offset;
+			w = (1 - t) * w1 + t * w2;
+
+			x = ipart_(interx);
+			if (CLIPXY_TEST(x, y)) {
+				if (fragdepth_or_discard || fragment_processing(x, y, z)) {
+					SET_VEC4(c->builtins.gl_FragCoord, x, y, z, 1/w);
+					c->builtins.discard = GL_FALSE;
+					c->builtins.gl_FragDepth = z;
+					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+					fragment_shader(c->fs_input, &c->builtins, uniform);
+					if (!c->builtins.discard) {
+						c->builtins.gl_FragColor.w *= rfpart_(interx);
+						draw_pixel(c->builtins.gl_FragColor, x, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+			if (CLIPXY_TEST(x+1, y)) {
+				if (fragdepth_or_discard || fragment_processing(x+1, y, z)) {
+					SET_VEC4(c->builtins.gl_FragCoord, x+1, y, z, 1/w);
+					c->builtins.discard = GL_FALSE;
+					c->builtins.gl_FragDepth = z;
+					setup_fs_input(t, v1_out, v2_out, w1, w2, provoke);
+					fragment_shader(c->fs_input, &c->builtins, uniform);
+					if (!c->builtins.discard) {
+						c->builtins.gl_FragColor.w *= fpart_(interx);
+						draw_pixel(c->builtins.gl_FragColor, x+1, y, c->builtins.gl_FragDepth, fragdepth_or_discard);
+					}
+				}
+			}
+
+			interx += gradient;
+		}
+	}
+}
+
+#undef swap_
+#undef plot
+#undef ipart_
+#undef fpart_
+#undef round_
+#undef rfpart_
 
 static void draw_triangle(glVertex* v0, glVertex* v1, glVertex* v2, unsigned int provoke)
 {
@@ -6823,6 +7145,8 @@ static void draw_triangle_final(glVertex* v0, glVertex* v1, glVertex* v2, unsign
 
 	c->builtins.gl_FrontFacing = front_facing;
 
+	// TODO when/if I get rid of glPolygonMode support for FRONT
+	// and BACK, this becomes a single function pointer, no branch
 	if (front_facing) {
 		c->draw_triangle_front(v0, v1, v2, provoke);
 	} else {
@@ -6995,6 +7319,8 @@ static void draw_triangle_clip(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 static void draw_triangle_point(glVertex* v0, glVertex* v1,  glVertex* v2, unsigned int provoke)
 {
 	//TODO use provoke?
+	PGL_UNUSED(provoke);
+
 	glVertex* vert[3] = { v0, v1, v2 };
 	vec3 hp[3];
 	hp[0] = vec4_to_vec3h(v0->screen_space);
@@ -7035,23 +7361,25 @@ static void draw_triangle_line(glVertex* v0, glVertex* v1,  glVertex* v2, unsign
 		poly_offset = calc_poly_offset(hp0, hp1, hp2);
 	}
 
-	if (c->line_width < 1.5f) {
-		if (v0->edge_flag)
-			draw_line_shader(hp0, hp1, w0, w1, v0->vs_out, v1->vs_out, provoke, poly_offset);
-		if (v1->edge_flag)
-			draw_line_shader(hp1, hp2, w1, w2, v1->vs_out, v2->vs_out, provoke, poly_offset);
-		if (v2->edge_flag)
-			draw_line_shader(hp2, hp0, w2, w0, v2->vs_out, v0->vs_out, provoke, poly_offset);
-	} else {
-
+	if (c->line_smooth) {
 		if (v0->edge_flag) {
-			DRAW_THICK_LINE(hp0, hp1, w0, w1, v0->vs_out, v1->vs_out, provoke, poly_offset);
+			draw_aa_line(hp0, hp1, w0, w1, v0->vs_out, v1->vs_out, provoke, poly_offset);
 		}
 		if (v1->edge_flag) {
-			DRAW_THICK_LINE(hp1, hp2, w1, w2, v1->vs_out, v2->vs_out, provoke, poly_offset);
+			draw_aa_line(hp1, hp2, w1, w2, v1->vs_out, v2->vs_out, provoke, poly_offset);
 		}
 		if (v2->edge_flag) {
-			DRAW_THICK_LINE(hp2, hp0, w2, w0, v2->vs_out, v0->vs_out, provoke, poly_offset);
+			draw_aa_line(hp2, hp0, w2, w0, v2->vs_out, v0->vs_out, provoke, poly_offset);
+		}
+	} else {
+		if (v0->edge_flag) {
+			draw_thick_line(hp0, hp1, w0, w1, v0->vs_out, v1->vs_out, provoke, poly_offset);
+		}
+		if (v1->edge_flag) {
+			draw_thick_line(hp1, hp2, w1, w2, v1->vs_out, v2->vs_out, provoke, poly_offset);
+		}
+		if (v2->edge_flag) {
+			draw_thick_line(hp2, hp0, w2, w0, v2->vs_out, v0->vs_out, provoke, poly_offset);
 		}
 	}
 }
@@ -7138,7 +7466,7 @@ static void draw_triangle_fill(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 	float alpha, beta, gamma, tmp, tmp2, z;
 	float fs_input[GL_MAX_VERTEX_OUTPUT_COMPONENTS];
 	float perspective[GL_MAX_VERTEX_OUTPUT_COMPONENTS*3];
-	float* vs_output = &c->vs_output.output_buf.a[0];
+	float* vs_output = &c->vs_output.output_buf[0];
 
 	for (int i=0; i<c->vs_output.size; ++i) {
 		perspective[i] = v0->vs_out[i]/p0.w;
@@ -7175,7 +7503,7 @@ static void draw_triangle_fill(glVertex* v0, glVertex* v1, glVertex* v2, unsigne
 				if ((alpha > 0 || line_func(&l12, hp0.x, hp0.y) * line_func(&l12, -1, -2.5) > 0) &&
 				    (beta  > 0 || line_func(&l20, hp1.x, hp1.y) * line_func(&l20, -1, -2.5) > 0) &&
 				    (gamma > 0 || line_func(&l01, hp2.x, hp2.y) * line_func(&l01, -1, -2.5) > 0)) {
-					//calculate interoplation here
+					//calculate interpolation here
 					tmp2 = alpha*inv_w0 + beta*inv_w1 + gamma*inv_w2;
 
 					z = alpha * hp0.z + beta * hp1.z + gamma * hp2.z;
@@ -7229,6 +7557,7 @@ static Color blend_pixel(vec4 src, vec4 dst)
 	vec4 bc = c->blend_color;
 	float i = MIN(src.w, 1-dst.w); // in colors this would be min(src.a, 255-dst.a)/255
 
+	// TODO initialize to get rid of "possibly uninitialized warning?"
 	vec4 Cs, Cd;
 
 	switch (c->blend_sRGB) {
@@ -7238,7 +7567,7 @@ static Color blend_pixel(vec4 src, vec4 dst)
 	case GL_ONE_MINUS_SRC_COLOR:      SET_VEC4(Cs, 1-src.x,1-src.y,1-src.z,1-src.w);         break;
 	case GL_DST_COLOR:                Cs = dst;                                              break;
 	case GL_ONE_MINUS_DST_COLOR:      SET_VEC4(Cs, 1-dst.x,1-dst.y,1-dst.z,1-dst.w);         break;
-	case GL_SRC_ALPHA:                SET_VEC4(Cs, src.w, src.w, src.w, src.w);              break;
+	case GL_SRC_ALPHA:    SET_VEC4(Cs, src.w, src.w, src.w, src.w);              break;
 	case GL_ONE_MINUS_SRC_ALPHA:      SET_VEC4(Cs, 1-src.w,1-src.w,1-src.w,1-src.w);         break;
 	case GL_DST_ALPHA:                SET_VEC4(Cs, dst.w, dst.w, dst.w, dst.w);              break;
 	case GL_ONE_MINUS_DST_ALPHA:      SET_VEC4(Cs, 1-dst.w,1-dst.w,1-dst.w,1-dst.w);         break;
@@ -7405,41 +7734,41 @@ static Color blend_pixel(vec4 src, vec4 dst)
 }
 
 // source and destination colors
-static Color logic_ops_pixel(Color s, Color d)
+static pix_t logic_ops_pixel(pix_t s, pix_t d)
 {
 	switch (c->logic_func) {
 	case GL_CLEAR:
-		return make_Color(0,0,0,0);
+		return 0;
 	case GL_SET:
-		return make_Color(255,255,255,255);
+		return ~0;
 	case GL_COPY:
 		return s;
 	case GL_COPY_INVERTED:
-		return make_Color(~s.r, ~s.g, ~s.b, ~s.a);
+		return ~s;
 	case GL_NOOP:
 		return d;
 	case GL_INVERT:
-		return make_Color(~d.r, ~d.g, ~d.b, ~d.a);
+		return ~d;
 	case GL_AND:
-		return make_Color(s.r & d.r, s.g & d.g, s.b & d.b, s.a & d.a);
+		return s & d;
 	case GL_NAND:
-		return make_Color(~(s.r & d.r), ~(s.g & d.g), ~(s.b & d.b), ~(s.a & d.a));
+		return ~(s & d);
 	case GL_OR:
-		return make_Color(s.r | d.r, s.g | d.g, s.b | d.b, s.a | d.a);
+		return s | d;
 	case GL_NOR:
-		return make_Color(~(s.r | d.r), ~(s.g | d.g), ~(s.b | d.b), ~(s.a | d.a));
+		return ~(s | d);
 	case GL_XOR:
-		return make_Color(s.r ^ d.r, s.g ^ d.g, s.b ^ d.b, s.a ^ d.a);
+		return s ^ d;
 	case GL_EQUIV:
-		return make_Color(~(s.r ^ d.r), ~(s.g ^ d.g), ~(s.b ^ d.b), ~(s.a ^ d.a));
+		return ~(s ^ d);
 	case GL_AND_REVERSE:
-		return make_Color(s.r & ~d.r, s.g & ~d.g, s.b & ~d.b, s.a & ~d.a);
+		return s & ~d;
 	case GL_AND_INVERTED:
-		return make_Color(~s.r & d.r, ~s.g & d.g, ~s.b & d.b, ~s.a & d.a);
+		return ~s & d;
 	case GL_OR_REVERSE:
-		return make_Color(s.r | ~d.r, s.g | ~d.g, s.b | ~d.b, s.a | ~d.a);
+		return s | ~d;
 	case GL_OR_INVERTED:
-		return make_Color(~s.r | d.r, ~s.g | d.g, ~s.b | d.b, ~s.a | d.a);
+		return ~s | d;
 	default:
 		puts("Unrecognized logic op!, defaulting to GL_COPY");
 		return s;
@@ -7447,6 +7776,7 @@ static Color logic_ops_pixel(Color s, Color d)
 
 }
 
+#ifndef PGL_NO_STENCIL
 static int stencil_test(u8 stencil)
 {
 	int func, ref, mask;
@@ -7476,10 +7806,14 @@ static int stencil_test(u8 stencil)
 
 }
 
-static void stencil_op(int stencil, int depth, u8* dest)
+// TODO change ints to GLboolean? or just rename to indicate they're booleans?
+// stencil_dest is pointer to stencil pixel which may be u32 for PGL_D24S8
+static void stencil_op(int stencil, int depth, void* stencil_dest)
 {
-	int op, ref, mask;
-	// make them proper arrays in gl_context?
+	GLuint op, ref, mask;
+	// TODO make them proper arrays in gl_context?
+	// ops is effectively set to an array of sfail, dpfail, dppass for either front
+	// or back facing
 	GLenum* ops;
 	// TODO what about non-triangles, should use front values, so need to make sure that's set?
 	if (c->builtins.gl_FrontFacing) {
@@ -7493,7 +7827,15 @@ static void stencil_op(int stencil, int depth, u8* dest)
 	}
 	op = (!stencil) ? ops[0] : ((!depth) ? ops[1] : ops[2]);
 
-	u8 val = *dest;
+	stencil_pix_t orig = *(stencil_pix_t*)stencil_dest;
+
+	// TODO check C conversion guide...is there a point to masking the low byte?
+#ifdef PGL_D16
+	u8 val = orig;
+#else
+	u8 val = orig & PGL_STENCIL_MASK;
+#endif
+
 	switch (op) {
 	case GL_KEEP: return;
 	case GL_ZERO: val = 0; break;
@@ -7505,12 +7847,22 @@ static void stencil_op(int stencil, int depth, u8* dest)
 	case GL_INVERT: val = ~val;
 	}
 
-	*dest = val & mask;
+	// TODO is this sufficient? It doesn't really write protect
+	// the bits not covered by the mask, it will just write 0 there
+	//u8 result = val & mask;
+	// TODO create a stencil test to verify correct behavior
+	u8 result = orig & ~mask | val & mask;
 
+#ifdef PGL_D16
+	*(u8*)stencil_dest = result;
+#else
+	*(u32*)stencil_dest = (orig & ~PGL_STENCIL_MASK) | result;
+#endif
 }
 
-static void draw_pixel_vec2(vec4 cf, vec2 pos, float z)
-{
+// end PGL_NO_STENCIL
+#endif
+
 /*
  * spec pg 110:
 Point rasterization produces a fragment for each framebuffer pixel whose center
@@ -7522,9 +7874,6 @@ would fall on the very edge of a 1 pixel square.  I think just drawing the upper
 corner pixel in these cases is fine and makes sense since width and height are actually 0.01 less
 than full, see make_viewport_matrix
 */
-
-	draw_pixel(cf, pos.x, pos.y, z, GL_TRUE);
-}
 
 static int fragment_processing(int x, int y, float z)
 {
@@ -7541,38 +7890,52 @@ static int fragment_processing(int x, int y, float z)
 	}
 	*/
 
+	// NOTE/TODO assumes all 3 buffers have the same dimensions
+	int i = -y*c->zbuf.w + x;
+
 	//MSAA
 	
-	//Stencil Test TODO have to handle when there is no stencil or depth buffer 
-	//(change gl_init to make stencil and depth buffers optional)
-	u8* stencil_dest = &c->stencil_buf.lastrow[-y*c->stencil_buf.w + x];
+#ifndef PGL_NO_STENCIL
+	//Stencil Test
+	stencil_pix_t* stencil_dest = &GET_STENCIL_PIX(i);
 	if (c->stencil_test) {
-		if (!stencil_test(*stencil_dest)) {
-			stencil_op(0, 1, stencil_dest);
+		if (!stencil_test(EXTRACT_STENCIL(*stencil_dest))) {
+			stencil_op(GL_FALSE, GL_TRUE, stencil_dest);
 			return 0;
 		}
 	}
+#endif
 
 	//Depth test if necessary
 	if (c->depth_test) {
 		// I made gl_FragDepth read/write, ie same == to gl_FragCoord.z going into the shader
 		// so I can just always use gl_FragDepth here
-		float dest_depth = ((float*)c->zbuf.lastrow)[-y*c->zbuf.w + x];
-		float src_depth = z;  //c->builtins.gl_FragDepth;  // pass as parameter?
+		u32 orig = GET_ZPIX(i);
+		u32 dest_depth = orig >> PGL_ZSHIFT;
+		//u32 dest_depth = GET_Z(i);
+		u32 src_depth = z * PGL_MAX_Z;
 
 		int depth_result = depthtest(src_depth, dest_depth);
 
+#ifndef PGL_NO_STENCIL
 		if (c->stencil_test) {
-			stencil_op(1, depth_result, stencil_dest);
+			stencil_op(GL_TRUE, depth_result, stencil_dest);
 		}
+#endif
 		if (!depth_result) {
 			return 0;
 		}
+
+		// TODO do this without an if statement, just bitwise logic, compare
+		// performance
 		if (c->depth_mask) {
-			((float*)c->zbuf.lastrow)[-y*c->zbuf.w + x] = src_depth;
+			SET_Z(i, orig, src_depth);
 		}
+#ifndef PGL_NO_STENCIL
 	} else if (c->stencil_test) {
-		stencil_op(1, 1, stencil_dest);
+		// Note depth test is treated as passed when depth testing is disabled
+		stencil_op(GL_TRUE, GL_TRUE, stencil_dest);
+#endif
 	}
 	return 1;
 }
@@ -7586,33 +7949,43 @@ static void draw_pixel(vec4 cf, int x, int y, float z, int do_frag_processing)
 
 	//Blending
 	Color dest_color, src_color;
-	u32* dest = &((u32*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x];
-	dest_color = make_Color((*dest & c->Rmask) >> c->Rshift, (*dest & c->Gmask) >> c->Gshift, (*dest & c->Bmask) >> c->Bshift, (*dest & c->Amask) >> c->Ashift);
+	pix_t src, dst;
+	pix_t* dest_loc = &((pix_t*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x];
+	dst = *dest_loc;
+	
+	// NOTE does not normalize, just extracts the channels
+	dest_color = PIXEL_TO_COLOR(dst);
 
 	if (c->blend) {
 		//TODO clamp in blend_pixel?  return the vec4 and clamp?
-		src_color = blend_pixel(cf, Color_to_vec4(dest_color));
+		
+		// TODO return pix_t directly?
+		src_color = blend_pixel(cf, COLOR_TO_VEC4(dest_color));
 	} else {
 		cf.x = clamp_01(cf.x);
 		cf.y = clamp_01(cf.y);
 		cf.z = clamp_01(cf.z);
 		cf.w = clamp_01(cf.w);
-		src_color = vec4_to_Color(cf);
+		//src_color = vec4_to_Color(cf);
+
+		// have VEC4_TO_PIXEL()?
+		src_color = VEC4_TO_COLOR(cf);
 	}
-	//this line needed the negation in the viewport matrix
-	//((u32*)c->back_buffer.buf)[y*buf.w+x] = c.a << 24 | c.c << 16 | c.g << 8 | c.b;
+
+	src = RGBA_TO_PIXEL(src_color.r, src_color.g, src_color.b, src_color.a);
 
 	//Logic Ops
 	if (c->logic_ops) {
-		src_color = logic_ops_pixel(src_color, dest_color);
+		src = logic_ops_pixel(src, dst);
 	}
-
 
 	//Dithering
 
-	//((u32*)c->back_buffer.buf)[(buf.h-1-y)*buf.w + x] = c.a << 24 | c.c << 16 | c.g << 8 | c.b;
-	//((u32*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x] = c.a << 24 | c.c << 16 | c.g << 8 | c.b;
-	*dest = (u32)src_color.a << c->Ashift | (u32)src_color.r << c->Rshift | (u32)src_color.g << c->Gshift | (u32)src_color.b << c->Bshift;
+#ifndef PGL_DISABLE_COLOR_MASK
+	src = (src & c->color_mask) | (dst & ~c->color_mask);
+#endif
+
+	*dest_loc = src;
 }
 
 
@@ -7630,37 +8003,50 @@ static void draw_pixel(vec4 cf, int x, int y, float z, int do_frag_processing)
 // for CHAR_BIT
 #include <limits.h>
 
-
-
-#ifdef DEBUG
-#define IS_VALID(target, error, ...) is_valid(target, error, __VA_ARGS__)
+// TODO different name? NO_ERROR_CHECKING? LOOK_MA_NO_HANDS?
+#ifdef PGL_UNSAFE
+#define PGL_SET_ERR(err)
+#define PGL_ERR(check, err)
+#define PGL_ERR_RET_VAL(check, err, ret)
+#define PGL_LOG(err)
 #else
-#define IS_VALID(target, error, ...) 1
+#define PGL_LOG(err) \
+	do { \
+		if (c->dbg_output && c->dbg_callback) { \
+			int len = snprintf(c->dbg_msg_buf, PGL_MAX_DEBUG_MESSAGE_LENGTH, "%s in %s()", pgl_err_strs[err-GL_NO_ERROR], __func__); \
+			c->dbg_callback(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_ERROR, 0, GL_DEBUG_SEVERITY_HIGH, len, c->dbg_msg_buf, c->dbg_userparam); \
+		} \
+	} while (0)
+
+#define PGL_SET_ERR(err) \
+	do { \
+		if (!c->error) c->error = err; \
+		PGL_LOG(err); \
+	} while (0)
+
+#define PGL_ERR(check, err) \
+	do { \
+		if (check) {  \
+			if (!c->error) c->error = err; \
+			PGL_LOG(err); \
+			return; \
+		} \
+	} while (0)
+
+#define PGL_ERR_RET_VAL(check, err, ret) \
+	do { \
+		if (check) {  \
+			if (!c->error) c->error = err; \
+			PGL_LOG(err); \
+			return ret; \
+		} \
+	} while (0)
 #endif
-
-int is_valid(GLenum target, GLenum error, int n, ...)
-{
-	va_list argptr;
-
-	va_start(argptr, n);
-	for (int i=0; i<n; ++i) {
-		if (target == va_arg(argptr, GLenum)) {
-			return 1;
-		}
-	}
-	va_end(argptr);
-
-	if (!c->error) {
-		c->error = error;
-	}
-	return 0;
-}
-
 
 // I just set everything even if not everything applies to the type
 // see section 3.8.15 pg 181 of spec for what it's supposed to be
 // TODO better name and inline?
-void INIT_TEX(glTexture* tex, GLenum target)
+static void INIT_TEX(glTexture* tex, GLenum target)
 {
 	tex->type = target;
 	tex->mag_filter = GL_LINEAR;
@@ -7686,13 +8072,19 @@ void INIT_TEX(glTexture* tex, GLenum target)
 }
 
 // default pass through shaders for index 0
-void default_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
+PGLDEF void default_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(vs_output);
+	PGL_UNUSED(uniforms);
+
 	builtins->gl_Position = vertex_attribs[PGL_ATTR_VERT];
 }
 
-void default_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
+PGLDEF void default_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(fs_input);
+	PGL_UNUSED(uniforms);
+
 	vec4* fragcolor = &builtins->gl_FragColor;
 	//wish I could use a compound literal, stupid C++ compatibility
 	fragcolor->x = 1.0f;
@@ -7701,15 +8093,32 @@ void default_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	fragcolor->w = 1.0f;
 }
 
-
-void init_glVertex_Array(glVertex_Array* v)
+// TODO Where to put this and what to name it? move this and all static functions to gl_internal.c?
+#ifndef PGL_UNSAFE
+static const char* pgl_err_strs[] =
 {
-	v->deleted = GL_FALSE;
-	for (int i=0; i<GL_MAX_VERTEX_ATTRIBS; ++i)
-		init_glVertex_Attrib(&v->vertex_attribs[i]);
-}
+	"GL_NO_ERROR",
+	"GL_INVALID_ENUM",
+	"GL_INVALID_VALUE",
+	"GL_INVALID_OPERATION",
+	"GL_INVALID_FRAMEBUFFER_OPERATION",
+	"GL_OUT_OF_MEMORY"
+};
 
-void init_glVertex_Attrib(glVertex_Attrib* v)
+PGLDEF void dflt_dbg_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam)
+{
+	PGL_UNUSED(source);
+	PGL_UNUSED(type);
+	PGL_UNUSED(id);
+	PGL_UNUSED(severity);
+	PGL_UNUSED(length);
+	PGL_UNUSED(userParam);
+
+	printf("%s\n", message);
+}
+#endif
+
+static void init_glVertex_Attrib(glVertex_Attrib* v)
 {
 	/*
 	GLint size;      // number of components 1-4
@@ -7726,6 +8135,13 @@ void init_glVertex_Attrib(glVertex_Attrib* v)
 	v->divisor = 0;
 }
 
+// TODO these are currently equivalent to memset(0) or = {0}...
+static void init_glVertex_Array(glVertex_Array* v)
+{
+	v->deleted = GL_FALSE;
+	for (int i=0; i<GL_MAX_VERTEX_ATTRIBS; ++i)
+		init_glVertex_Attrib(&v->vertex_attribs[i]);
+}
 
 #define GET_SHIFT(mask, shift) \
 	do {\
@@ -7737,38 +8153,21 @@ void init_glVertex_Attrib(glVertex_Attrib* v)
 	} while (0)
 
 
-int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u32 Rmask, u32 Gmask, u32 Bmask, u32 Amask)
+PGLDEF GLboolean init_glContext(glContext* context, pix_t** back, GLsizei w, GLsizei h)
 {
-	if (bitdepth > 32 || !back)
-		return 0;
+	// Realistically I only support exactly 32 bit pixels, 8 bits per channel
+	PGL_ERR_RET_VAL(!back, GL_INVALID_VALUE, GL_FALSE);
+	PGL_ERR_RET_VAL((w < 0 || h < 0), GL_INVALID_VALUE, GL_FALSE);
 
 	c = context;
+	memset(c, 0, sizeof(glContext));
 
-	c->user_alloced_backbuf = *back != NULL;
-	if (!*back) {
-		int bytes_per_pixel = (bitdepth + CHAR_BIT-1) / CHAR_BIT;
-		*back = (u32*)PGL_MALLOC(w * h * bytes_per_pixel);
-		if (!*back)
-			return 0;
-	}
-
-	c->zbuf.buf = (u8*)PGL_MALLOC(w*h * sizeof(float));
-	if (!c->zbuf.buf) {
-		if (!c->user_alloced_backbuf) {
-			PGL_FREE(*back);
-			*back = NULL;
-		}
-		return 0;
-	}
-
-	c->stencil_buf.buf = (u8*)PGL_MALLOC(w*h);
-	if (!c->stencil_buf.buf) {
-		if (!c->user_alloced_backbuf) {
-			PGL_FREE(*back);
-			*back = NULL;
-		}
-		PGL_FREE(c->zbuf.buf);
-		return 0;
+	if (*back != NULL) {
+		c->user_alloced_backbuf = GL_TRUE;
+		c->back_buffer.buf = (u8*)*back;
+		c->back_buffer.w = w;
+		c->back_buffer.h = h;
+		c->back_buffer.lastrow = c->back_buffer.buf + (h-1)*w*sizeof(pix_t);
 	}
 
 	c->xmin = 0;
@@ -7776,33 +8175,12 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	c->width = w;
 	c->height = h;
 
-	c->lx = 0;
-	c->ly = 0;
-	c->ux = w;
-	c->uy = h;
-
-	c->zbuf.w = w;
-	c->zbuf.h = h;
-	c->zbuf.lastrow = c->zbuf.buf + (h-1)*w*sizeof(float);
-
-	c->stencil_buf.w = w;
-	c->stencil_buf.h = h;
-	c->stencil_buf.lastrow = c->stencil_buf.buf + (h-1)*w;
-
-	c->back_buffer.w = w;
-	c->back_buffer.h = h;
-	c->back_buffer.buf = (u8*) *back;
-	c->back_buffer.lastrow = c->back_buffer.buf + (h-1)*w*sizeof(u32);
-
-	c->bitdepth = bitdepth; //not used yet
-	c->Rmask = Rmask;
-	c->Gmask = Gmask;
-	c->Bmask = Bmask;
-	c->Amask = Amask;
-	GET_SHIFT(Rmask, c->Rshift);
-	GET_SHIFT(Gmask, c->Gshift);
-	GET_SHIFT(Bmask, c->Bshift);
-	GET_SHIFT(Amask, c->Ashift);
+	//c->red_mask = GL_TRUE;
+	//c->green_mask = GL_TRUE;
+	//c->blue_mask = GL_TRUE;
+	//c->alpha_mask = GL_TRUE;
+	//c->color_mask = Rmask | Gmask | Bmask | Amask;
+	c->color_mask = ~0;
 
 	//initialize all vectors
 	cvec_glVertex_Array(&c->vertex_arrays, 0, 3);
@@ -7811,12 +8189,11 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	cvec_glTexture(&c->textures, 0, 1);
 	cvec_glVertex(&c->glverts, 0, 10);
 
-	//TODO might as well just set it to PGL_MAX_VERTICES * MAX_OUTPUT_COMPONENTS
-	cvec_float(&c->vs_output.output_buf, 0, 0);
+	// If not pre-allocating max, need to track size and edit glUseProgram and pglSetInterp
+	c->vs_output.output_buf = (float*)PGL_MALLOC(PGL_MAX_VERTICES * GL_MAX_VERTEX_OUTPUT_COMPONENTS * sizeof(float));
+	PGL_ERR_RET_VAL(!c->vs_output.output_buf, GL_OUT_OF_MEMORY, GL_FALSE);
 
-
-	c->clear_stencil = 0;
-	c->clear_color = make_Color(0, 0, 0, 0);
+	c->clear_color = 0;
 	SET_VEC4(c->blend_color, 0, 0, 0, 0);
 	c->point_size = 1.0f;
 	c->line_width = 1.0f;
@@ -7824,7 +8201,6 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	c->depth_range_near = 0.0f;
 	c->depth_range_far = 1.0f;
 	make_viewport_matrix(c->vp_mat, 0, 0, w, h, 1);
-
 
 	//set flags
 	//TODO match order in structure definition
@@ -7843,6 +8219,9 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	c->poly_offset_fill = GL_FALSE;
 	c->scissor_test = GL_FALSE;
 
+#ifndef PGL_NO_STENCIL
+	c->clear_stencil = 0;
+
 	c->stencil_test = GL_FALSE;
 	c->stencil_writemask = -1; // all 1s for the masks
 	c->stencil_writemask_back = -1;
@@ -7858,6 +8237,7 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	c->stencil_sfail_back = GL_KEEP;
 	c->stencil_dpfail_back = GL_KEEP;
 	c->stencil_dppass_back = GL_KEEP;
+#endif
 
 	c->logic_func = GL_COPY;
 	c->blend_sRGB = GL_ONE;
@@ -7888,17 +8268,24 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	c->draw_triangle_back = draw_triangle_fill;
 
 	c->error = GL_NO_ERROR;
+#ifndef PGL_UNSAFE
+	c->dbg_callback = dflt_dbg_callback;
+	c->dbg_output = GL_TRUE;
+#else
+	c->dbg_callback = NULL;
+	c->dbg_output = GL_FALSE;
+#endif
 
-	//program 0 is supposed to be undefined but not invalid so I'll
-	//just make it default, no transform, just draws things red
-	glProgram tmp_prog = { default_vs, default_fs, NULL, 0, {0}, GL_FALSE };
+	// program 0 is supposed to be undefined but not invalid so I'll
+	// just make it default, no transform, just draws things red
+	glProgram tmp_prog = { default_vs, default_fs, NULL, 0, {0}, GL_FALSE, GL_FALSE };
 	cvec_push_glProgram(&c->programs, tmp_prog);
 	glUseProgram(0);
 
-	//setup default vertex_array (vao) at position 0
-	//we're like a compatibility profile for this but come on
-	//no reason not to have this imo
-	//https://www.opengl.org/wiki/Vertex_Specification#Vertex_Array_Object
+	// setup default vertex_array (vao) at position 0
+	// we're like a compatibility profile for this but come on
+	// no reason not to have this imo
+	// https://www.opengl.org/wiki/Vertex_Specification#Vertex_Array_Object
 	glVertex_Array tmp_va;
 	init_glVertex_Array(&tmp_va);
 	cvec_push_glVertex_Array(&c->vertex_arrays, tmp_va);
@@ -7915,17 +8302,34 @@ int init_glContext(glContext* context, u32** back, int w, int h, int bitdepth, u
 	INIT_TEX(&tmp_tex, GL_TEXTURE_UNBOUND);
 	cvec_push_glTexture(&c->textures, tmp_tex);
 
+	// default texture (0) is bound to all targets initially
 	memset(c->bound_buffers, 0, sizeof(c->bound_buffers));
 	memset(c->bound_textures, 0, sizeof(c->bound_textures));
 
-	return 1;
+	// DRY, do all buffer allocs/init in here
+	if (!pglResizeFramebuffer(w, h)) {
+		PGL_FREE(c->zbuf.buf);
+#if defined(PGL_D16) && !defined(PGL_NO_STENCIL)
+		PGL_FREE(c->stencil_buf.buf);
+#endif
+		if (!c->user_alloced_backbuf) {
+			PGL_FREE(c->back_buffer.buf);
+		}
+		return GL_FALSE;
+	}
+
+	*back = (pix_t*)c->back_buffer.buf;
+
+	return GL_TRUE;
 }
 
-void free_glContext(glContext* ctx)
+PGLDEF void free_glContext(glContext* ctx)
 {
 	int i;
 	PGL_FREE(ctx->zbuf.buf);
+#if defined(PGL_D16) && !defined(PGL_NO_STENCIL)
 	PGL_FREE(ctx->stencil_buf.buf);
+#endif
 	if (!ctx->user_alloced_backbuf) {
 		PGL_FREE(ctx->back_buffer.buf);
 	}
@@ -7949,42 +8353,70 @@ void free_glContext(glContext* ctx)
 	cvec_free_glTexture(&ctx->textures);
 	cvec_free_glVertex(&ctx->glverts);
 
-	cvec_free_float(&ctx->vs_output.output_buf);
+	PGL_FREE(ctx->vs_output.output_buf);
 
 	if (c == ctx) {
 		c = NULL;
 	}
 }
 
-void set_glContext(glContext* context)
+PGLDEF void set_glContext(glContext* context)
 {
 	c = context;
 }
 
-void* pglResizeFramebuffer(size_t w, size_t h)
+PGLDEF GLboolean pglResizeFramebuffer(GLsizei w, GLsizei h)
 {
+	PGL_ERR_RET_VAL((w < 0 || h < 0), GL_INVALID_VALUE, GL_FALSE);
+
 	u8* tmp;
-	tmp = (u8*)PGL_REALLOC(c->zbuf.buf, w*h * sizeof(float));
-	if (!tmp) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		return NULL;
+
+	// Have to check because the C standard doesn't guarantee that passing
+	// the same size to realloc is a no-op and will return the same pointer
+	if (w != c->back_buffer.w || h != c->back_buffer.h) {
+		tmp = (u8*)PGL_REALLOC(c->back_buffer.buf, w*h * sizeof(pix_t));
+		PGL_ERR_RET_VAL(!tmp, GL_OUT_OF_MEMORY, GL_FALSE);
+		c->back_buffer.buf = tmp;
+		c->back_buffer.w = w;
+		c->back_buffer.h = h;
+		c->back_buffer.lastrow = c->back_buffer.buf + (h-1)*w*sizeof(pix_t);
 	}
+
+#ifdef PGL_D24S8
+	tmp = (u8*)PGL_REALLOC(c->zbuf.buf, w*h * sizeof(u32));
+	PGL_ERR_RET_VAL(!tmp, GL_OUT_OF_MEMORY, GL_FALSE);
+
 	c->zbuf.buf = tmp;
 	c->zbuf.w = w;
 	c->zbuf.h = h;
-	c->zbuf.lastrow = c->zbuf.buf + (h-1)*w*sizeof(float);
+	c->zbuf.lastrow = c->zbuf.buf + (h-1)*w*sizeof(u32);
 
-	tmp = (u8*)PGL_REALLOC(c->back_buffer.buf, w*h * sizeof(u32));
-	if (!tmp) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		return NULL;
-	}
-	c->back_buffer.buf = tmp;
-	c->back_buffer.w = w;
-	c->back_buffer.h = h;
-	c->back_buffer.lastrow = c->back_buffer.buf + (h-1)*w*sizeof(u32);
+	// not checking for NO_STENCIL here because it makes no sense not to
+	// have it if you're already using the space
+	c->stencil_buf.buf = tmp;
+	c->stencil_buf.w = w;
+	c->stencil_buf.h = h;
+	c->stencil_buf.lastrow = c->stencil_buf.buf + (h-1)*w*sizeof(u32);
+#elif defined PGL_D16
+	tmp = (u8*)PGL_REALLOC(c->zbuf.buf, w*h * sizeof(u16));
+	PGL_ERR_RET_VAL(!tmp, GL_OUT_OF_MEMORY, GL_FALSE);
+
+	c->zbuf.buf = tmp;
+	c->zbuf.w = w;
+	c->zbuf.h = h;
+	c->zbuf.lastrow = c->zbuf.buf + (h-1)*w*sizeof(u16);
+
+#ifndef PGL_NO_STENCIL
+	tmp = (u8*)PGL_REALLOC(c->stencil_buf.buf, w*h);
+	PGL_ERR_RET_VAL(!tmp, GL_OUT_OF_MEMORY, GL_FALSE);
+	c->stencil_buf.buf = tmp;
+	c->stencil_buf.w = w;
+	c->stencil_buf.h = h;
+	c->stencil_buf.lastrow = c->stencil_buf.buf + (h-1)*w;
+#endif
+#else
+#error "PGL_D24S8 and PGL_D16 are the only depth/stencil formats supported":
+#endif
 
 	if (c->scissor_test) {
 		int ux = c->scissor_lx+c->scissor_w;
@@ -8001,16 +8433,16 @@ void* pglResizeFramebuffer(size_t w, size_t h)
 		c->uy = h;
 	}
 
-	return tmp;
+	return GL_TRUE;
 }
 
 
 
-GLubyte* glGetString(GLenum name)
+PGLDEF GLubyte* glGetString(GLenum name)
 {
 	static GLubyte vendor[] = "Robert Winkler (robertwinkler.com)";
-	static GLubyte renderer[] = "PortableGL 0.98.0";
-	static GLubyte version[] = "0.98.0";
+	static GLubyte renderer[] = "PortableGL 0.100.0";
+	static GLubyte version[] = "0.100.0";
 	static GLubyte shading_language[] = "C/C++";
 
 	switch (name) {
@@ -8019,24 +8451,24 @@ GLubyte* glGetString(GLenum name)
 	case GL_VERSION:                  return version;
 	case GL_SHADING_LANGUAGE_VERSION: return shading_language;
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return 0;
+		PGL_SET_ERR(GL_INVALID_ENUM);
+		return NULL;
 	}
 }
 
-GLenum glGetError()
+PGLDEF GLenum glGetError(void)
 {
 	GLenum err = c->error;
 	c->error = GL_NO_ERROR;
 	return err;
 }
 
-void glGenVertexArrays(GLsizei n, GLuint* arrays)
+PGLDEF void glGenVertexArrays(GLsizei n, GLuint* arrays)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
+
 	glVertex_Array tmp = {0};
 	//init_glVertex_Array(&tmp);
-
 	tmp.deleted = GL_FALSE;
 
 	//fill up empty slots first
@@ -8054,14 +8486,21 @@ void glGenVertexArrays(GLsizei n, GLuint* arrays)
 	}
 }
 
-void glDeleteVertexArrays(GLsizei n, const GLuint* arrays)
+PGLDEF void glDeleteVertexArrays(GLsizei n, const GLuint* arrays)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 	for (int i=0; i<n; ++i) {
 		if (!arrays[i] || arrays[i] >= c->vertex_arrays.size)
 			continue;
 
+		// NOTE/TODO: This is non-standard behavior even in a compatibility profile but it
+		// is similar to (from the user's perspective) how GL handles DeleteProgram called on
+		// the active program.  So instead of getting a blank screen immediately, you just
+		// free up the name moving the current vao to the default 0. Of course if you're switching
+		// between VAOs and bind to the old name, you will get a GL error even if it still works
+		// (because VAOS are POD and I don't overwrite it)... so maybe I should just have an
+		// error here
 		if (arrays[i] == c->cur_vertex_array) {
-			//TODO check if memcpy isn't enough
 			memcpy(&c->vertex_arrays.a[0], &c->vertex_arrays.a[arrays[i]], sizeof(glVertex_Array));
 			c->cur_vertex_array = 0;
 		}
@@ -8070,8 +8509,9 @@ void glDeleteVertexArrays(GLsizei n, const GLuint* arrays)
 	}
 }
 
-void glGenBuffers(GLsizei n, GLuint* buffers)
+PGLDEF void glGenBuffers(GLsizei n, GLuint* buffers)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 	//fill up empty slots first
 	int j = 0;
 	for (int i=1; i<c->buffers.size && j<n; ++i) {
@@ -8093,8 +8533,9 @@ void glGenBuffers(GLsizei n, GLuint* buffers)
 	}
 }
 
-void glDeleteBuffers(GLsizei n, const GLuint* buffers)
+PGLDEF void glDeleteBuffers(GLsizei n, const GLuint* buffers)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 	GLenum type;
 	for (int i=0; i<n; ++i) {
 		if (!buffers[i] || buffers[i] >= c->buffers.size)
@@ -8115,8 +8556,9 @@ void glDeleteBuffers(GLsizei n, const GLuint* buffers)
 	}
 }
 
-void glGenTextures(GLsizei n, GLuint* textures)
+PGLDEF void glGenTextures(GLsizei n, GLuint* textures)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 	int j = 0;
 	for (int i=1; i<c->textures.size && j<n; ++i) {
 		if (c->textures.a[i].deleted) {
@@ -8137,13 +8579,10 @@ void glGenTextures(GLsizei n, GLuint* textures)
 	}
 }
 
-void glCreateTextures(GLenum target, GLsizei n, GLuint* textures)
+PGLDEF void glCreateTextures(GLenum target, GLsizei n, GLuint* textures)
 {
-	if (target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES), GL_INVALID_ENUM);
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 
 	target -= GL_TEXTURE_UNBOUND + 1;
 	int j = 0;
@@ -8163,8 +8602,9 @@ void glCreateTextures(GLenum target, GLsizei n, GLuint* textures)
 	}
 }
 
-void glDeleteTextures(GLsizei n, const GLuint* textures)
+PGLDEF void glDeleteTextures(GLsizei n, const GLuint* textures)
 {
+	PGL_ERR(n < 0, GL_INVALID_VALUE);
 	GLenum type;
 	for (int i=0; i<n; ++i) {
 		if (!textures[i] || textures[i] >= c->textures.size)
@@ -8186,69 +8626,51 @@ void glDeleteTextures(GLsizei n, const GLuint* textures)
 	}
 }
 
-void glBindVertexArray(GLuint array)
+PGLDEF void glBindVertexArray(GLuint array)
 {
-	if (array < c->vertex_arrays.size && c->vertex_arrays.a[array].deleted == GL_FALSE) {
-		c->cur_vertex_array = array;
-		c->bound_buffers[GL_ELEMENT_ARRAY_BUFFER-GL_ARRAY_BUFFER] = c->vertex_arrays.a[array].element_buffer;
-	} else if (!c->error) {
-		c->error = GL_INVALID_OPERATION;
-	}
+	PGL_ERR((array >= c->vertex_arrays.size || c->vertex_arrays.a[array].deleted), GL_INVALID_OPERATION);
+
+	c->cur_vertex_array = array;
+	c->bound_buffers[GL_ELEMENT_ARRAY_BUFFER-GL_ARRAY_BUFFER] = c->vertex_arrays.a[array].element_buffer;
 }
 
-void glBindBuffer(GLenum target, GLuint buffer)
+PGLDEF void glBindBuffer(GLenum target, GLuint buffer)
 {
-//GL_ARRAY_BUFFER, GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GL_ELEMENT_ARRAY_BUFFER,
-//GL_PIXEL_PACK_BUFFER, GL_PIXEL_UNPACK_BUFFER, GL_TEXTURE_BUFFER, GL_TRANSFORM_FEEDBACK_BUFFER, or GL_UNIFORM_BUFFER.
-	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER, GL_INVALID_ENUM);
+
+	PGL_ERR((buffer >= c->buffers.size || c->buffers.a[buffer].deleted), GL_INVALID_OPERATION);
 
 	target -= GL_ARRAY_BUFFER;
-	if (buffer < c->buffers.size && c->buffers.a[buffer].deleted == GL_FALSE) {
-		c->bound_buffers[target] = buffer;
+	c->bound_buffers[target] = buffer;
 
-		// Note type isn't set till binding and we're not storing the raw
-		// enum but the enum - GL_ARRAY_BUFFER so it's an index into c->bound_buffers
-		// TODO need to see what's supposed to happen if you try to bind
-		// a buffer to multiple targets
-		c->buffers.a[buffer].type = target;
+	// Note type isn't set till binding and we're not storing the raw
+	// enum but the enum - GL_ARRAY_BUFFER so it's an index into c->bound_buffers
+	// TODO need to see what's supposed to happen if you try to bind
+	// a buffer to multiple targets
+	c->buffers.a[buffer].type = target;
 
-		if (target == GL_ELEMENT_ARRAY_BUFFER - GL_ARRAY_BUFFER) {
-			c->vertex_arrays.a[c->cur_vertex_array].element_buffer = buffer;
-		}
-	} else if (!c->error) {
-		c->error = GL_INVALID_OPERATION;
+	if (target == GL_ELEMENT_ARRAY_BUFFER - GL_ARRAY_BUFFER) {
+		c->vertex_arrays.a[c->cur_vertex_array].element_buffer = buffer;
 	}
 }
 
-void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
+PGLDEF void glBufferData(GLenum target, GLsizeiptr size, const GLvoid* data, GLenum usage)
 {
-	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
 	//TODO check for usage later
+	PGL_UNUSED(usage);
+
+	PGL_ERR((target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER), GL_INVALID_ENUM);
+	PGL_ERR(size < 0, GL_INVALID_VALUE);
 
 	target -= GL_ARRAY_BUFFER;
-	if (c->bound_buffers[target] == 0) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
+	PGL_ERR(!c->bound_buffers[target], GL_INVALID_OPERATION);
 
 	// the spec says any pre-existing data store is deleted but there's no reason to
 	// c->buffers.a[c->bound_buffers[target]].data is always NULL or valid
-	if (!(c->buffers.a[c->bound_buffers[target]].data = (u8*)PGL_REALLOC(c->buffers.a[c->bound_buffers[target]].data, size))) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		// GL state is undefined from here on
-		return;
-	}
+	u8* tmp = (u8*)PGL_REALLOC(c->buffers.a[c->bound_buffers[target]].data, size);
+	PGL_ERR(!tmp, GL_OUT_OF_MEMORY);
+
+	c->buffers.a[c->bound_buffers[target]].data = tmp;
 
 	if (data) {
 		memcpy(c->buffers.a[c->bound_buffers[target]].data, data, size);
@@ -8258,49 +8680,32 @@ void glBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
 	c->buffers.a[c->bound_buffers[target]].size = size;
 }
 
-void glBufferSubData(GLenum target, GLsizei offset, GLsizei size, const GLvoid* data)
+PGLDEF void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid* data)
 {
-	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER, GL_INVALID_ENUM);
+	PGL_ERR((offset < 0 || size < 0), GL_INVALID_VALUE);
 
 	target -= GL_ARRAY_BUFFER;
-	if (c->bound_buffers[target] == 0) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
 
-	if (offset + size > c->buffers.a[c->bound_buffers[target]].size) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(!c->bound_buffers[target], GL_INVALID_OPERATION);
+	PGL_ERR((offset + size > c->buffers.a[c->bound_buffers[target]].size), GL_INVALID_VALUE);
 
 	memcpy(&c->buffers.a[c->bound_buffers[target]].data[offset], data, size);
 }
 
-void glNamedBufferData(GLuint buffer, GLsizei size, const GLvoid* data, GLenum usage)
+PGLDEF void glNamedBufferData(GLuint buffer, GLsizeiptr size, const GLvoid* data, GLenum usage)
 {
 	//check for usage later
+	PGL_UNUSED(usage);
 
-	if (buffer == 0 || buffer >= c->buffers.size || c->buffers.a[buffer].deleted) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
+	PGL_ERR((!buffer || buffer >= c->buffers.size || c->buffers.a[buffer].deleted), GL_INVALID_OPERATION);
+	PGL_ERR(size < 0, GL_INVALID_VALUE);
 
 	//always NULL or valid
 	PGL_FREE(c->buffers.a[buffer].data);
 
-	if (!(c->buffers.a[buffer].data = (u8*)PGL_MALLOC(size))) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		// GL state is undefined from here on
-		return;
-	}
+	c->buffers.a[buffer].data = (u8*)PGL_MALLOC(size);
+	PGL_ERR(!c->buffers.a[buffer].data, GL_OUT_OF_MEMORY);
 
 	if (data) {
 		memcpy(c->buffers.a[buffer].data, data, size);
@@ -8310,52 +8715,47 @@ void glNamedBufferData(GLuint buffer, GLsizei size, const GLvoid* data, GLenum u
 	c->buffers.a[buffer].size = size;
 }
 
-void glNamedBufferSubData(GLuint buffer, GLsizei offset, GLsizei size, const GLvoid* data)
+PGLDEF void glNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, const GLvoid* data)
 {
-	if (buffer == 0 || buffer >= c->buffers.size || c->buffers.a[buffer].deleted) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
-
-	if (offset + size > c->buffers.a[buffer].size) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((!buffer || buffer >= c->buffers.size || c->buffers.a[buffer].deleted), GL_INVALID_OPERATION);
+	PGL_ERR((offset < 0 || size < 0), GL_INVALID_VALUE);
+	PGL_ERR((offset + size > c->buffers.a[buffer].size), GL_INVALID_VALUE);
 
 	memcpy(&c->buffers.a[buffer].data[offset], data, size);
 }
 
-void glBindTexture(GLenum target, GLuint texture)
+PGLDEF void glBindTexture(GLenum target, GLuint texture)
 {
-	if (target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target < GL_TEXTURE_1D || target >= GL_NUM_TEXTURE_TYPES), GL_INVALID_ENUM);
 
 	target -= GL_TEXTURE_UNBOUND + 1;
 
-	if (texture < c->textures.size && !c->textures.a[texture].deleted) {
-		if (c->textures.a[texture].type == GL_TEXTURE_UNBOUND) {
-			c->bound_textures[target] = texture;
-			INIT_TEX(&c->textures.a[texture], target);
-		} else if (c->textures.a[texture].type == target) {
-			c->bound_textures[target] = texture;
-		} else if (!c->error) {
-			c->error = GL_INVALID_OPERATION;
-		}
-	} else if (!c->error) {
-		c->error = GL_INVALID_VALUE;
+	PGL_ERR((texture >= c->textures.size || c->textures.a[texture].deleted), GL_INVALID_VALUE);
+
+	GLenum type = c->textures.a[texture].type;
+	PGL_ERR((type != GL_TEXTURE_UNBOUND && type != target), GL_INVALID_OPERATION);
+
+	if (type == GL_TEXTURE_UNBOUND) {
+		c->bound_textures[target] = texture;
+		INIT_TEX(&c->textures.a[texture], target);
+	} else {
+		c->bound_textures[target] = texture;
 	}
 }
 
 static void set_texparami(glTexture* tex, GLenum pname, GLint param)
 {
+	/*
+	PGL_ERR((pname != GL_TEXTURE_MIN_FILTER && pname != GL_TEXTURE_MAG_FILTER &&
+	         pname != GL_TEXTURE_WRAP_S && pname != GL_TEXTURE_WRAP_T &&
+	         pname != GL_TEXTURE_WRAP_R), GL_INVALID_ENUM);
+	         */
+
 	// NOTE, currently in the texture access functions
 	// if it's not NEAREST, it assumes LINEAR so I could
 	// just say that's good rather than these switch statements
+	//
+	// TODO compress this code
 	if (pname == GL_TEXTURE_MIN_FILTER) {
 		switch (param) {
 		case GL_NEAREST:
@@ -8369,8 +8769,7 @@ static void set_texparami(glTexture* tex, GLenum pname, GLint param)
 			param = GL_LINEAR;
 			break;
 		default:
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
+			PGL_SET_ERR(GL_INVALID_ENUM);
 			return;
 		}
 		tex->min_filter = param;
@@ -8387,82 +8786,49 @@ static void set_texparami(glTexture* tex, GLenum pname, GLint param)
 			param = GL_LINEAR;
 			break;
 		default:
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
+			PGL_SET_ERR(GL_INVALID_ENUM);
 			return;
 		}
 		tex->min_filter = param;
 		tex->mag_filter = param;
 	} else if (pname == GL_TEXTURE_WRAP_S) {
-		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
+		PGL_ERR((param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT), GL_INVALID_ENUM);
 		tex->wrap_s = param;
 	} else if (pname == GL_TEXTURE_WRAP_T) {
-		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
+		PGL_ERR((param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT), GL_INVALID_ENUM);
 		tex->wrap_t = param;
 	} else if (pname == GL_TEXTURE_WRAP_R) {
-		if (param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT) {
-			if (!c->error)
-				c->error = GL_INVALID_ENUM;
-			return;
-		}
+		PGL_ERR((param != GL_REPEAT && param != GL_CLAMP_TO_EDGE && param != GL_CLAMP_TO_BORDER && param != GL_MIRRORED_REPEAT), GL_INVALID_ENUM);
 		tex->wrap_r = param;
 	} else {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 
 }
 
-void glTexParameteri(GLenum target, GLenum pname, GLint param)
+PGLDEF void glTexParameteri(GLenum target, GLenum pname, GLint param)
 {
-	//GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_3D, GL_TEXTURE_1D_ARRAY, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_RECTANGLE, or GL_TEXTURE_CUBE_MAP.
-	//will add others as they're implemented
-	if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_RECTANGLE && target != GL_TEXTURE_CUBE_MAP) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-	
+	PGL_ERR((target != GL_TEXTURE_1D && target != GL_TEXTURE_2D && target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_RECTANGLE && target != GL_TEXTURE_CUBE_MAP), GL_INVALID_ENUM);
+
 	//shift to range 0 - NUM_TEXTURES-1 to access bound_textures array
 	target -= GL_TEXTURE_UNBOUND + 1;
 
 	set_texparami(&c->textures.a[c->bound_textures[target]], pname, param);
 }
 
-void glTextureParameteri(GLuint texture, GLenum pname, GLint param)
+PGLDEF void glTextureParameteri(GLuint texture, GLenum pname, GLint param)
 {
-	if (texture >= c->textures.size) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
-
+	PGL_ERR(texture >= c->textures.size, GL_INVALID_OPERATION);
 	set_texparami(&c->textures.a[texture], pname, param);
 }
 
-void glPixelStorei(GLenum pname, GLint param)
+PGLDEF void glPixelStorei(GLenum pname, GLint param)
 {
-	if (pname != GL_UNPACK_ALIGNMENT && pname != GL_PACK_ALIGNMENT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((pname != GL_UNPACK_ALIGNMENT && pname != GL_PACK_ALIGNMENT), GL_INVALID_ENUM);
 
-	if (param != 1 && param != 2 && param != 4 && param != 8) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-	
+	PGL_ERR((param != 1 && param != 2 && param != 4 && param != 8), GL_INVALID_VALUE);
+
+	// TODO eliminate branch? or use PGL_SET_ERR in else
 	if (pname == GL_UNPACK_ALIGNMENT) {
 		c->unpack_alignment = param;
 	} else if (pname == GL_PACK_ALIGNMENT) {
@@ -8471,6 +8837,7 @@ void glPixelStorei(GLenum pname, GLint param)
 
 }
 
+// TODO check preprocessor output
 #define CHECK_FORMAT_GET_COMP(format, components) \
 	do { \
 	switch (format) { \
@@ -8493,41 +8860,24 @@ void glPixelStorei(GLenum pname, GLint param)
 		components = 4; \
 		break; \
 	default: \
-		if (!c->error) \
-			c->error = GL_INVALID_ENUM; \
+		PGL_SET_ERR(GL_INVALID_ENUM); \
 		return; \
 	} \
 	} while (0)
 
-void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_1D) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
+	PGL_UNUSED(border);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	//ignore level and internalformat for now
+	PGL_ERR(target != GL_TEXTURE_1D, GL_INVALID_ENUM);
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
@@ -8540,12 +8890,8 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	PGL_FREE(c->textures.a[cur_tex].data);
 
 	//TODO hardcoded 4 till I support more than RGBA/UBYTE internally
-	if (!(c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(width * 4))) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		//undefined state now
-		return;
-	}
+	c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(width * 4);
+	PGL_ERR(!c->textures.a[cur_tex].data, GL_OUT_OF_MEMORY);
 
 	u8* texdata = c->textures.a[cur_tex].data;
 
@@ -8556,46 +8902,30 @@ void glTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	c->textures.a[cur_tex].user_owned = GL_FALSE;
 }
 
-void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
+	PGL_UNUSED(border);
+
 	// TODO GL_TEXTURE_1D_ARRAY
-	if (target != GL_TEXTURE_2D &&
-	    target != GL_TEXTURE_RECTANGLE &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_2D &&
+	         target != GL_TEXTURE_RECTANGLE &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z), GL_INVALID_ENUM);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((height < 0 || height > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
 
-	//ignore level for now
-
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	// TODO internalFormat ignored for now, always converted
-	// to RGBA32 anyway
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
@@ -8618,12 +8948,8 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		PGL_FREE(c->textures.a[cur_tex].data);
 
 		//TODO support other internal formats? components should be of internalformat not format hardcoded 4 until I support more than RGBA
-		if (!(c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(height * width*4))) {
-			if (!c->error)
-				c->error = GL_OUT_OF_MEMORY;
-			//undefined state now
-			return;
-		}
+		c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(height * width*4);
+		PGL_ERR(!c->textures.a[cur_tex].data, GL_OUT_OF_MEMORY);
 
 		if (data) {
 			convert_format_to_packed_rgba(c->textures.a[cur_tex].data, (u8*)data, width, height, padded_row_len, format);
@@ -8639,12 +8965,9 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 		if (!c->textures.a[cur_tex].w)
 			PGL_FREE(c->textures.a[cur_tex].data);
 
-		if (width != height) {
-			//TODO spec says INVALID_VALUE, man pages say INVALID_ENUM ?
-			if (!c->error)
-				c->error = GL_INVALID_VALUE;
-			return;
-		}
+		// TODO specs say INVALID_VALUE, man/ref pages say INVALID_ENUM?
+		// https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexImage2D.xhtml
+		PGL_ERR(width != height, GL_INVALID_VALUE);
 
 		// TODO hardcoded 4 as long as we only support RGBA/UBYTES
 		int mem_size = width*height*6 * 4;
@@ -8652,24 +8975,19 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 			c->textures.a[cur_tex].w = width;
 			c->textures.a[cur_tex].h = width; //same cause square
 
-			if (!(c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(mem_size))) {
-				if (!c->error)
-					c->error = GL_OUT_OF_MEMORY;
-				//undefined state now
-				return;
-			}
+			c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(mem_size);
+			PGL_ERR(!c->textures.a[cur_tex].data, GL_OUT_OF_MEMORY);
 		} else if (c->textures.a[cur_tex].w != width) {
 			//TODO spec doesn't say all sides must have same dimensions but it makes sense
 			//and this site suggests it http://www.opengl.org/wiki/Cubemap_Texture
-			if (!c->error)
-				c->error = GL_INVALID_VALUE;
+			PGL_SET_ERR(GL_INVALID_VALUE);
 			return;
 		}
 
 		//use target as plane index
 		target -= GL_TEXTURE_CUBE_MAP_POSITIVE_X;
 
-		// TODO handle different format and internalFormat
+		// TODO handle different format and internalformat
 		int p = height*width*4;
 		u8* texdata = c->textures.a[cur_tex].data;
 
@@ -8681,34 +8999,21 @@ void glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	} //end CUBE_MAP
 }
 
-void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
+	PGL_UNUSED(border);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	//ignore level and internalformat for now
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY), GL_INVALID_ENUM);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((height < 0 || height > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((depth < 0 || depth > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
@@ -8728,12 +9033,8 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	PGL_FREE(c->textures.a[cur_tex].data);
 
 	//TODO hardcoded 4 till I support more than RGBA/UBYTE internally
-	if (!(c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(width*height*depth * 4))) {
-		if (!c->error)
-			c->error = GL_OUT_OF_MEMORY;
-		//undefined state now
-		return;
-	}
+	c->textures.a[cur_tex].data = (u8*)PGL_MALLOC(width*height*depth * 4);
+	PGL_ERR(!c->textures.a[cur_tex].data, GL_OUT_OF_MEMORY);
 
 	u8* texdata = c->textures.a[cur_tex].data;
 
@@ -8744,76 +9045,50 @@ void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei widt
 	c->textures.a[cur_tex].user_owned = GL_FALSE;
 }
 
-void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_1D) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_UNUSED(level);
 
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	//ignore level for now
+	PGL_ERR(target != GL_TEXTURE_1D, GL_INVALID_ENUM);
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
 	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
 #endif
 
-	if (xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w), GL_INVALID_VALUE);
 
 	u32* texdata = (u32*) c->textures.a[cur_tex].data;
 	convert_format_to_packed_rgba((u8*)&texdata[xoffset], (u8*)data, width, 1, width*components, format);
 }
 
-void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* data)
 {
+	PGL_UNUSED(level);
+
 	// TODO GL_TEXTURE_1D_ARRAY
-	if (target != GL_TEXTURE_2D &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_2D &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z), GL_INVALID_ENUM);
 
-	//ignore level for now
-
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((height < 0 || height > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
@@ -8830,11 +9105,7 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 		cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 		u32* texdata = (u32*) c->textures.a[cur_tex].data;
 
-		if (xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w || yoffset < 0 || yoffset + height > c->textures.a[cur_tex].h) {
-			if (!c->error)
-				c->error = GL_INVALID_VALUE;
-			return;
-		}
+		PGL_ERR((xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w || yoffset < 0 || yoffset + height > c->textures.a[cur_tex].h), GL_INVALID_VALUE);
 
 		int w = c->textures.a[cur_tex].w;
 
@@ -8861,29 +9132,19 @@ void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 	} //end CUBE_MAP
 }
 
-void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_UNUSED(level);
 
-	//ignore level for now
-	
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY), GL_INVALID_ENUM);
+	PGL_ERR((width < 0 || width > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((height < 0 || height > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR((depth < 0 || depth > PGL_MAX_TEXTURE_SIZE), GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
 	int components;
 #ifdef PGL_DONT_CONVERT_TEXTURES
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 	components = 4;
 #else
 	CHECK_FORMAT_GET_COMP(format, components);
@@ -8895,13 +9156,9 @@ void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 
 	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
-	if (xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w ||
-	    yoffset < 0 || yoffset + height > c->textures.a[cur_tex].h ||
-	    zoffset < 0 || zoffset + depth > c->textures.a[cur_tex].d) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((xoffset < 0 || xoffset + width > c->textures.a[cur_tex].w ||
+	         yoffset < 0 || yoffset + height > c->textures.a[cur_tex].h ||
+	         zoffset < 0 || zoffset + depth > c->textures.a[cur_tex].d), GL_INVALID_VALUE);
 
 	int w = c->textures.a[cur_tex].w;
 	int h = c->textures.a[cur_tex].h;
@@ -8921,32 +9178,29 @@ void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, G
 	}
 }
 
-void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer)
+PGLDEF void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const GLvoid* pointer)
 {
-	// core profile is error if 0 array_buffer and pointer
-	// compatibility profile is if non-zero VAO and above conditions
-	// to prevent client arrays.
+	// See Section 2.8 pages 37-38 of 3.3 compatiblity spec
 	//
-	// Technically GLES 2 doesn't even have VAOs but you can usually
-	// get them as an extension with the suffix OES
+	// Compare with Section 2.8 page 29 of 3.3 core spec
+	// plus section E.2.2, pg 344 (VAOs required for everything, no default/0 VAO)
 	//
-	// GLES 3 is the same as GL 3.3 compatibility specifically for
-	// backward compatibility with GLES 2
+	// GLES 2 and 3 match 3.3 compatibility profile
+	//
+	// Basically, core got rid of client arrays entirely, while compatibility
+	// allows them for the default/0 VAO.
 	//
 	// So for now I've decided to match the compatibility profile
 	// but you can easily remove c->cur_vertex_array from the check
-	// below to enable client arrays for all VAOs and it will
-	// still work just fine
-	if (index >= GL_MAX_VERTEX_ATTRIBS || size < 1 || size > 4 ||
-	    (c->cur_vertex_array && !c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER] && pointer)) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
+	// below to enable client arrays for all VAOs; there's not really
+	// any downside in PGL, it's all RAM.
+	PGL_ERR((c->cur_vertex_array && !c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER] && pointer),
+	        GL_INVALID_OPERATION);
 
-	//TODO type Specifies the data type of each component in the array. The symbolic constants GL_BYTE, GL_UNSIGNED_BYTE, GL_SHORT,
-	//GL_UNSIGNED_SHORT, GL_INT, and GL_UNSIGNED_INT are accepted by both functions. Additionally GL_HALF_FLOAT, GL_FLOAT, GL_DOUBLE,
-	//GL_INT_2_10_10_10_REV, and GL_UNSIGNED_INT_2_10_10_10_REV are accepted by glVertexAttribPointer. The initial value is GL_FLOAT.
+	PGL_ERR(stride < 0, GL_INVALID_VALUE);
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
+	PGL_ERR((size < 1 || size > 4), GL_INVALID_VALUE);
+
 	int type_sz = 4;
 	switch (type) {
 	case GL_BYTE:           type_sz = sizeof(GLbyte); break;
@@ -8960,8 +9214,7 @@ void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean norm
 	case GL_DOUBLE: type_sz = sizeof(GLdouble); break;
 
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 		return;
 	}
 
@@ -8971,30 +9224,42 @@ void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean norm
 	v->normalized = normalized;
 	v->stride = (stride) ? stride : size*type_sz;
 
-	// offset can still really a pointer if using the 0 VAO
-	// and no bound ARRAY_BUFFER. !v->buf and !(buf data) see vertex_stage()
+	// offset can still really be a pointer if using the 0 VAO and no bound ARRAY_BUFFER.
 	v->offset = (GLsizeiptr)pointer;
 	// I put ARRAY_BUFFER-itself instead of 0 to reinforce that bound_buffers is indexed that way, buffer type - GL_ARRAY_BUFFER
 	v->buf = c->bound_buffers[GL_ARRAY_BUFFER-GL_ARRAY_BUFFER];
 }
 
-void glEnableVertexAttribArray(GLuint index)
+PGLDEF void glEnableVertexAttribArray(GLuint index)
 {
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
 	c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs[index].enabled = GL_TRUE;
 }
 
-void glDisableVertexAttribArray(GLuint index)
+PGLDEF void glDisableVertexAttribArray(GLuint index)
 {
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
 	c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs[index].enabled = GL_FALSE;
 }
 
-void glVertexAttribDivisor(GLuint index, GLuint divisor)
+PGLDEF void glEnableVertexArrayAttrib(GLuint vaobj, GLuint index)
 {
-	if (index >= GL_MAX_VERTEX_ATTRIBS) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
+	PGL_ERR((vaobj >= c->vertex_arrays.size || c->vertex_arrays.a[vaobj].deleted), GL_INVALID_OPERATION);
+
+	c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs[index].enabled = GL_TRUE;
+}
+
+PGLDEF void glDisableVertexArrayAttrib(GLuint vaobj, GLuint index)
+{
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
+	PGL_ERR((vaobj >= c->vertex_arrays.size || c->vertex_arrays.a[vaobj].deleted), GL_INVALID_OPERATION);
+	c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs[index].enabled = GL_FALSE;
+}
+
+PGLDEF void glVertexAttribDivisor(GLuint index, GLuint divisor)
+{
+	PGL_ERR(index >= GL_MAX_VERTEX_ATTRIBS, GL_INVALID_VALUE);
 
 	c->vertex_arrays.a[c->cur_vertex_array].vertex_attribs[index].divisor = divisor;
 }
@@ -9002,39 +9267,21 @@ void glVertexAttribDivisor(GLuint index, GLuint divisor)
 
 
 //TODO(rswinkle): Why is first, an index, a GLint and not GLuint or GLsizei?
-void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+PGLDEF void glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR(count < 0, GL_INVALID_VALUE);
 
-	// TODO should I just make GLsizei an uint32_t rather than int32_t?
-	if (count < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
 	if (!count)
 		return;
 
 	run_pipeline(mode, (GLvoid*)(GLintptr)first, count, 0, 0, GL_FALSE);
 }
 
-void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount)
+PGLDEF void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	if (drawcount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR(drawcount < 0, GL_INVALID_VALUE);
 
 	for (GLsizei i=0; i<drawcount; i++) {
 		if (!count[i]) continue;
@@ -9042,26 +9289,14 @@ void glMultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GL
 	}
 }
 
-void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices)
+PGLDEF void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR(count < 0, GL_INVALID_VALUE);
 
-	//error not in the spec but says type must be one of these ... strange
-	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-	// TODO should I just make GLsizei an uint32_t rather than int32_t?
-	if (count < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	// TODO error not in the spec but says type must be one of these ... strange
+	PGL_ERR((type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT), GL_INVALID_ENUM);
+
 	if (!count)
 		return;
 
@@ -9069,25 +9304,13 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indic
 }
 
 // TODO fix
-void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices, GLsizei drawcount)
+PGLDEF void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices, GLsizei drawcount)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR(drawcount < 0, GL_INVALID_VALUE);
 
-	if (drawcount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-	//error not in the spec but says type must be one of these ... strange
-	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	// TODO error not in the spec but says type must be one of these ... strange
+	PGL_ERR((type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT), GL_INVALID_ENUM);
 
 	for (GLsizei i=0; i<drawcount; i++) {
 		if (!count[i]) continue;
@@ -9095,114 +9318,77 @@ void glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const G
 	}
 }
 
-void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount)
+PGLDEF void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR((count < 0 || instancecount < 0), GL_INVALID_VALUE);
 
-	if (count < 0 || instancecount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
 	if (!count || !instancecount)
 		return;
 
-	for (unsigned int instance = 0; instance < instancecount; ++instance) {
+	for (GLsizei instance = 0; instance < instancecount; ++instance) {
 		run_pipeline(mode, (GLvoid*)(GLintptr)first, count, instance, 0, GL_FALSE);
 	}
 }
 
-void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount, GLuint baseinstance)
+PGLDEF void glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount, GLuint baseinstance)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR((count < 0 || instancecount < 0), GL_INVALID_VALUE);
 
-	if (count < 0 || instancecount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
 	if (!count || !instancecount)
 		return;
 
-	for (unsigned int instance = 0; instance < instancecount; ++instance) {
+	for (GLsizei instance = 0; instance < instancecount; ++instance) {
 		run_pipeline(mode, (GLvoid*)(GLintptr)first, count, instance, baseinstance, GL_FALSE);
 	}
 }
 
 
-void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei instancecount)
+PGLDEF void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei instancecount)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR((count < 0 || instancecount < 0), GL_INVALID_VALUE);
 
 	// NOTE: error not in the spec but says type must be one of these ... strange
-	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-	if (count < 0 || instancecount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT), GL_INVALID_ENUM);
+
 	if (!count || !instancecount)
 		return;
 
-	for (unsigned int instance = 0; instance < instancecount; ++instance) {
+	for (GLsizei instance = 0; instance < instancecount; ++instance) {
 		run_pipeline(mode, indices, count, instance, 0, type);
 	}
 }
 
-void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei instancecount, GLuint baseinstance)
+PGLDEF void glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLsizei instancecount, GLuint baseinstance)
 {
-	if (mode < GL_POINTS || mode > GL_TRIANGLE_FAN) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode < GL_POINTS || mode > GL_TRIANGLE_FAN), GL_INVALID_ENUM);
+	PGL_ERR((count < 0 || instancecount < 0), GL_INVALID_VALUE);
 
 	//error not in the spec but says type must be one of these ... strange
-	if (type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-	if (count < 0 || instancecount < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR((type != GL_UNSIGNED_BYTE && type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT), GL_INVALID_ENUM);
+
 	if (!count || !instancecount)
 		return;
 
-	for (unsigned int instance = 0; instance < instancecount; ++instance) {
+	for (GLsizei instance = 0; instance < instancecount; ++instance) {
 		run_pipeline(mode, indices, count, instance, baseinstance, GL_TRUE);
 	}
 }
 
-
-void glViewport(int x, int y, GLsizei width, GLsizei height)
+PGLDEF void glDebugMessageCallback(GLDEBUGPROC callback, void* userParam)
 {
-	if (width < 0 || height < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	c->dbg_callback = callback;
+	c->dbg_userparam = userParam;
+}
+
+PGLDEF void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
+{
+	PGL_ERR((width < 0 || height < 0), GL_INVALID_VALUE);
 
 	// TODO: Do I need a full matrix? Also I don't actually
-	// use these values anywhere else so why save them?
+	// use these values anywhere else so why save them?  See ref pages or TinyGL for alternative
 	make_viewport_matrix(c->vp_mat, x, y, width, height, 1);
 	c->xmin = x;
 	c->ymin = y;
@@ -9210,80 +9396,125 @@ void glViewport(int x, int y, GLsizei width, GLsizei height)
 	c->height = height;
 }
 
-void glClearColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
+PGLDEF void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
 	red = clamp_01(red);
 	green = clamp_01(green);
 	blue = clamp_01(blue);
 	alpha = clamp_01(alpha);
 
-	vec4 tmp = { red, green, blue, alpha };
-	c->clear_color = vec4_to_Color(tmp);
+	//vec4 tmp = { red, green, blue, alpha };
+	//c->clear_color = vec4_to_Color(tmp);
+	c->clear_color = RGBA_TO_PIXEL(red*PGL_RMAX, green*PGL_GMAX, blue*PGL_BMAX, alpha*PGL_AMAX);
 }
 
-void glClearDepth(GLclampf depth)
+PGLDEF void glClearDepthf(GLfloat depth)
 {
 	c->clear_depth = clamp_01(depth);
 }
 
-void glDepthFunc(GLenum func)
+PGLDEF void glClearDepth(GLdouble depth)
 {
-	if (func < GL_LESS || func > GL_NEVER) {
-		if (!c->error)
-			c->error =GL_INVALID_ENUM;
+	c->clear_depth = clamp_01(depth);
+}
 
-		return;
-	}
+PGLDEF void glDepthFunc(GLenum func)
+{
+	PGL_ERR((func < GL_LESS || func > GL_NEVER), GL_INVALID_ENUM);
 
 	c->depth_func = func;
 }
 
-void glDepthRange(GLclampf nearVal, GLclampf farVal)
+PGLDEF void glDepthRangef(GLfloat nearVal, GLfloat farVal)
 {
 	c->depth_range_near = clamp_01(nearVal);
 	c->depth_range_far = clamp_01(farVal);
 }
 
-void glDepthMask(GLboolean flag)
+PGLDEF void glDepthRange(GLdouble nearVal, GLdouble farVal)
+{
+	c->depth_range_near = clamp_01(nearVal);
+	c->depth_range_far = clamp_01(farVal);
+}
+
+PGLDEF void glDepthMask(GLboolean flag)
 {
 	c->depth_mask = flag;
 }
 
-void glClear(GLbitfield mask)
+PGLDEF void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha)
 {
-	if (!(mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		puts("failed to clear");
-		return;
-	}
-	
+#ifndef PGL_DISABLE_COLOR_MASK
+	// !! ensures 1 or 0
+	red = !!red;
+	green = !!green;
+	blue = !!blue;
+	alpha = !!alpha;
+
+	// By multiplying by the pixel format masks there's no need to shift them
+	pix_t rmask = red*PGL_RMASK;
+	pix_t gmask = green*PGL_GMASK;
+	pix_t bmask = blue*PGL_BMASK;
+	pix_t amask = alpha*PGL_AMASK;
+	c->color_mask = rmask | gmask | bmask | amask;
+#endif
+}
+
+PGLDEF void glClear(GLbitfield mask)
+{
+	// TODO: If a buffer is not present, then a glClear directed at that buffer has no effect.
+	// right now they're all always present
+
+	PGL_ERR((mask & ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)), GL_INVALID_VALUE);
+
 	// NOTE: All buffers should have the same dimensions/size
 	int sz = c->ux * c->uy;
 	int w = c->back_buffer.w;
 
-	Color col = c->clear_color;
-	u32 color = (u32)col.a << c->Ashift | (u32)col.r << c->Rshift | (u32)col.g << c->Gshift | (u32)col.b << c->Bshift;
+	pix_t color = c->clear_color;
 
-	float cd = c->clear_depth;
+#ifndef PGL_DISABLE_COLOR_MASK
+	// clear out channels not enabled for writing
+	// TODO are these casts really necessary?
+	color &= (pix_t)c->color_mask;
+	// used to erase channels to be written
+	pix_t clear_mask = ~((pix_t)c->color_mask);
+	pix_t tmp;
+#endif
+
+	u32 cd = (u32)(c->clear_depth * PGL_MAX_Z) << PGL_ZSHIFT;
+#ifndef PGL_NO_STENCIL
 	u8 cs = c->clear_stencil;
+#endif
 	if (!c->scissor_test) {
 		if (mask & GL_COLOR_BUFFER_BIT) {
 			for (int i=0; i<sz; ++i) {
-				((u32*)c->back_buffer.buf)[i] = color;
+#ifdef PGL_DISABLE_COLOR_MASK
+				((pix_t*)c->back_buffer.buf)[i] = color;
+#else
+				tmp = ((pix_t*)c->back_buffer.buf)[i];
+				tmp &= clear_mask;
+				((pix_t*)c->back_buffer.buf)[i] = tmp | color;
+#endif
 			}
 		}
-		if (mask & GL_DEPTH_BUFFER_BIT) {
+		if (mask & GL_DEPTH_BUFFER_BIT && c->depth_mask) {
 			for (int i=0; i < sz; ++i) {
-				((float*)c->zbuf.buf)[i] = cd;
+				SET_Z_PRESHIFTED_TOP(i, cd);
 			}
 		}
+
+#ifndef PGL_NO_STENCIL
 		if (mask & GL_STENCIL_BUFFER_BIT) {
+#ifdef PGL_D16
 			memset(c->stencil_buf.buf, cs, sz);
-			//for (int i=0; i < sz; ++i) {
-			//	c->stencil_buf.buf[i] = cs;
-			//}
+#else
+			for (int i=0; i < sz; ++i) {
+				SET_STENCIL_TOP(i, cs);
+			}
+#endif
 		}
+#endif
 	} else {
 		// TODO this code is correct with or without scissor
 		// enabled, test performance difference with above before
@@ -9291,28 +9522,39 @@ void glClear(GLbitfield mask)
 		if (mask & GL_COLOR_BUFFER_BIT) {
 			for (int y=c->ly; y<c->uy; ++y) {
 				for (int x=c->lx; x<c->ux; ++x) {
-					((u32*)c->back_buffer.lastrow)[-y*w + x] = color;
+					int i = -y*w + x;
+#ifdef PGL_DISABLE_COLOR_MASK
+					((pix_t*)c->back_buffer.lastrow)[i] = color;
+#else
+					tmp = ((pix_t*)c->back_buffer.lastrow)[i];
+					tmp &= clear_mask;
+					((pix_t*)c->back_buffer.lastrow)[i] = tmp | color;
+#endif
 				}
 			}
 		}
-		if (mask & GL_DEPTH_BUFFER_BIT) {
+		if (mask & GL_DEPTH_BUFFER_BIT && c->depth_mask) {
 			for (int y=c->ly; y<c->uy; ++y) {
 				for (int x=c->lx; x<c->ux; ++x) {
-					((float*)c->zbuf.lastrow)[-y*w + x] = cd;
+					int i = -y*w + x;
+					SET_Z_PRESHIFTED(i, cd);
 				}
 			}
 		}
+#ifndef PGL_NO_STENCIL
 		if (mask & GL_STENCIL_BUFFER_BIT) {
 			for (int y=c->ly; y<c->uy; ++y) {
 				for (int x=c->lx; x<c->ux; ++x) {
-					c->stencil_buf.lastrow[-y*w + x] = cs;
+					int i = -y*w + x;
+					SET_STENCIL(i, cs);
 				}
 			}
 		}
+#endif
 	}
 }
 
-void glEnable(GLenum cap)
+PGLDEF void glEnable(GLenum cap)
 {
 	switch (cap) {
 	case GL_CULL_FACE:
@@ -9326,7 +9568,7 @@ void glEnable(GLenum cap)
 		break;
 	case GL_LINE_SMOOTH:
 		// TODO implementation needs work/upgrade
-		//c->line_smooth = GL_TRUE;
+		c->line_smooth = GL_TRUE;
 		break;
 	case GL_BLEND:
 		c->blend = GL_TRUE;
@@ -9353,15 +9595,19 @@ void glEnable(GLenum cap)
 		c->uy = MIN(uy, c->back_buffer.h);
 	} break;
 	case GL_STENCIL_TEST:
+#ifndef PGL_NO_STENCIL
 		c->stencil_test = GL_TRUE;
+#endif
+		break;
+	case GL_DEBUG_OUTPUT:
+		c->dbg_output = GL_TRUE;
 		break;
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 }
 
-void glDisable(GLenum cap)
+PGLDEF void glDisable(GLenum cap)
 {
 	switch (cap) {
 	case GL_CULL_FACE:
@@ -9399,15 +9645,19 @@ void glDisable(GLenum cap)
 		c->uy = c->back_buffer.h;
 		break;
 	case GL_STENCIL_TEST:
+#ifndef PGL_NO_STENCIL
 		c->stencil_test = GL_FALSE;
+#endif
+		break;
+	case GL_DEBUG_OUTPUT:
+		c->dbg_output = GL_FALSE;
 		break;
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 }
 
-GLboolean glIsEnabled(GLenum cap)
+PGLDEF GLboolean glIsEnabled(GLenum cap)
 {
 	// make up my own enum for this?  rename member as no_early_z?
 	//GLboolean fragdepth_or_discard;
@@ -9422,16 +9672,17 @@ GLboolean glIsEnabled(GLenum cap)
 	case GL_POLYGON_OFFSET_LINE: return c->poly_offset_line;
 	case GL_POLYGON_OFFSET_FILL: return c->poly_offset_fill;
 	case GL_SCISSOR_TEST: return c->scissor_test;
+#ifndef PGL_NO_STENCIL
 	case GL_STENCIL_TEST: return c->stencil_test;
+#endif
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 
 	return GL_FALSE;
 }
 
-GLboolean glIsProgram(GLuint program)
+PGLDEF GLboolean glIsProgram(GLuint program)
 {
 	if (!program || program >= c->programs.size || c->programs.a[program].deleted) {
 		return GL_FALSE;
@@ -9440,7 +9691,7 @@ GLboolean glIsProgram(GLuint program)
 	return GL_TRUE;
 }
 
-void glGetBooleanv(GLenum pname, GLboolean* data)
+PGLDEF void glGetBooleanv(GLenum pname, GLboolean* data)
 {
 	// not sure it's worth adding every enum, spec says
 	// gelGet* will convert/map types if they don't match the function
@@ -9455,34 +9706,52 @@ void glGetBooleanv(GLenum pname, GLboolean* data)
 	case GL_POLYGON_OFFSET_LINE:  *data = c->poly_offset_line; break;
 	case GL_POLYGON_OFFSET_FILL:  *data = c->poly_offset_fill; break;
 	case GL_SCISSOR_TEST:         *data = c->scissor_test;     break;
+#ifndef PGL_NO_STENCIL
 	case GL_STENCIL_TEST:         *data = c->stencil_test;     break;
+#endif
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 }
 
-void glGetFloatv(GLenum pname, GLfloat* data)
+PGLDEF void glGetFloatv(GLenum pname, GLfloat* data)
 {
 	switch (pname) {
-	case GL_POLYGON_OFFSET_FACTOR: *data = c->poly_factor; break;
-	case GL_POLYGON_OFFSET_UNITS:  *data = c->poly_units;  break;
-	case GL_POINT_SIZE:            *data = c->point_size;  break;
-	case GL_DEPTH_CLEAR_VALUE:     *data = c->clear_depth; break;
+	case GL_POLYGON_OFFSET_FACTOR:         *data = c->poly_factor;         break;
+	case GL_POLYGON_OFFSET_UNITS:          *data = c->poly_units;          break;
+	case GL_POINT_SIZE:                    *data = c->point_size;          break;
+	case GL_LINE_WIDTH:                    *data = c->line_width;          break;
+	case GL_DEPTH_CLEAR_VALUE:             *data = c->clear_depth;         break;
+	case GL_SMOOTH_LINE_WIDTH_GRANULARITY: *data = PGL_SMOOTH_GRANULARITY; break;
+
+	case GL_MAX_TEXTURE_SIZE:         *data = PGL_MAX_TEXTURE_SIZE;         break;
+	case GL_MAX_3D_TEXTURE_SIZE:      *data = PGL_MAX_3D_TEXTURE_SIZE;      break;
+	case GL_MAX_ARRAY_TEXTURE_LAYERS: *data = PGL_MAX_ARRAY_TEXTURE_LAYERS; break;
+
+	case GL_ALIASED_LINE_WIDTH_RANGE:
+		data[0] = 1.0f;
+		data[1] = PGL_MAX_ALIASED_WIDTH;
+		break;
+
+	case GL_SMOOTH_LINE_WIDTH_RANGE:
+		data[0] = 1.0f;
+		data[1] = PGL_MAX_SMOOTH_WIDTH;
+		break;
+
 	case GL_DEPTH_RANGE:
 		data[0] = c->depth_range_near;
 		data[1] = c->depth_range_near;
 		break;
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 }
 
-void glGetIntegerv(GLenum pname, GLint* data)
+PGLDEF void glGetIntegerv(GLenum pname, GLint* data)
 {
 	// TODO maybe make all the enum/int member names match the associated ENUM?
 	switch (pname) {
+#ifndef PGL_NO_STENCIL
 	case GL_STENCIL_WRITE_MASK:       data[0] = c->stencil_writemask; break;
 	case GL_STENCIL_REF:              data[0] = c->stencil_ref; break;
 	case GL_STENCIL_VALUE_MASK:       data[0] = c->stencil_valuemask; break;
@@ -9498,6 +9767,7 @@ void glGetIntegerv(GLenum pname, GLint* data)
 	case GL_STENCIL_BACK_FAIL:            data[0] = c->stencil_sfail_back; break;
 	case GL_STENCIL_BACK_PASS_DEPTH_FAIL: data[0] = c->stencil_dpfail_back; break;
 	case GL_STENCIL_BACK_PASS_DEPTH_PASS: data[0] = c->stencil_dppass_back; break;
+#endif
 
 	case GL_LOGIC_OP_MODE:             data[0] = c->logic_func; break;
 
@@ -9515,6 +9785,12 @@ void glGetIntegerv(GLenum pname, GLint* data)
 	case GL_DEPTH_FUNC:                data[0] = c->depth_func; break;
 	case GL_POINT_SPRITE_COORD_ORIGIN: data[0] = c->point_spr_origin; break;
 	case GL_PROVOKING_VERTEX:          data[0] = c->provoking_vert; break;
+
+	case GL_MAX_TEXTURE_SIZE:         data[0] = PGL_MAX_TEXTURE_SIZE;         break;
+	case GL_MAX_3D_TEXTURE_SIZE:      data[0] = PGL_MAX_3D_TEXTURE_SIZE;      break;
+	case GL_MAX_ARRAY_TEXTURE_LAYERS: data[0] = PGL_MAX_ARRAY_TEXTURE_LAYERS; break;
+
+	case GL_MAX_DEBUG_MESSAGE_LENGTH: data[0] = PGL_MAX_DEBUG_MESSAGE_LENGTH; break;
 
 	case GL_POLYGON_MODE:
 		data[0] = c->poly_mode_front;
@@ -9565,40 +9841,29 @@ void glGetIntegerv(GLenum pname, GLint* data)
 	case GL_TEXTURE_BINDING_CUBE_MAP:  data[0] = c->bound_textures[GL_TEXTURE_CUBE_MAP-GL_TEXTURE_UNBOUND-1]; break;
 
 	default:
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+		PGL_SET_ERR(GL_INVALID_ENUM);
 	}
 }
 
-void glCullFace(GLenum mode)
+PGLDEF void glCullFace(GLenum mode)
 {
-	if (mode != GL_FRONT && mode != GL_BACK && mode != GL_FRONT_AND_BACK) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode != GL_FRONT && mode != GL_BACK && mode != GL_FRONT_AND_BACK), GL_INVALID_ENUM);
 	c->cull_mode = mode;
 }
 
-
-void glFrontFace(GLenum mode)
+PGLDEF void glFrontFace(GLenum mode)
 {
-	if (mode != GL_CCW && mode != GL_CW) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((mode != GL_CCW && mode != GL_CW), GL_INVALID_ENUM);
 	c->front_face = mode;
 }
 
-void glPolygonMode(GLenum face, GLenum mode)
+PGLDEF void glPolygonMode(GLenum face, GLenum mode)
 {
-	if ((face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK) ||
-	    (mode != GL_POINT && mode != GL_LINE && mode != GL_FILL)) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	// TODO only support FRONT_AND_BACK like OpenGL 3/4 and OpenGL ES 2/3 ...
+	// or keep support for FRONT and BACK like OpenGL 1 and 2?
+	// Make decision before version 0.100.0
+	PGL_ERR(((face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK) ||
+	         (mode != GL_POINT && mode != GL_LINE && mode != GL_FILL)), GL_INVALID_ENUM);
 
 	if (mode == GL_POINT) {
 		if (face == GL_FRONT) {
@@ -9642,63 +9907,43 @@ void glPolygonMode(GLenum face, GLenum mode)
 	}
 }
 
-void glLineWidth(GLfloat width)
+PGLDEF void glLineWidth(GLfloat width)
 {
-	if (width <= 0.0f) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(width <= 0.0f, GL_INVALID_VALUE);
 	c->line_width = width;
 }
 
-void glPointSize(GLfloat size)
+PGLDEF void glPointSize(GLfloat size)
 {
-	if (size <= 0.0f) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(size <= 0.0f, GL_INVALID_VALUE);
 	c->point_size = size;
 }
 
-void glPointParameteri(GLenum pname, GLint param)
+PGLDEF void glPointParameteri(GLenum pname, GLint param)
 {
 	//also GL_POINT_FADE_THRESHOLD_SIZE
-	if (pname != GL_POINT_SPRITE_COORD_ORIGIN || (param != GL_LOWER_LEFT && param != GL_UPPER_LEFT)) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((pname != GL_POINT_SPRITE_COORD_ORIGIN ||
+	        (param != GL_LOWER_LEFT && param != GL_UPPER_LEFT)), GL_INVALID_ENUM);
+
 	c->point_spr_origin = param;
 }
 
-
-void glProvokingVertex(GLenum provokeMode)
+PGLDEF void glProvokingVertex(GLenum provokeMode)
 {
-	if (provokeMode != GL_FIRST_VERTEX_CONVENTION && provokeMode != GL_LAST_VERTEX_CONVENTION) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((provokeMode != GL_FIRST_VERTEX_CONVENTION && provokeMode != GL_LAST_VERTEX_CONVENTION), GL_INVALID_ENUM);
 
 	c->provoking_vert = provokeMode;
 }
 
 
 // Shader functions
-GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard)
+PGLDEF GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsizei n, GLenum* interpolation, GLboolean fragdepth_or_discard)
 {
-	if (!vertex_shader || !fragment_shader) {
-		//TODO set error? doesn't in spec but I'll think about it
-		return 0;
-	}
+	// Using glAttachShader error if shader is not a shader object which
+	// is the closest analog
+	PGL_ERR_RET_VAL((!vertex_shader || !fragment_shader), GL_INVALID_OPERATION, 0);
 
-	if (n < 0 || n > GL_MAX_VERTEX_OUTPUT_COMPONENTS) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return 0;
-	}
+	PGL_ERR_RET_VAL((n < 0 || n > GL_MAX_VERTEX_OUTPUT_COMPONENTS), GL_INVALID_VALUE, 0);
 
 	glProgram tmp = {vertex_shader, fragment_shader, NULL, n, {0}, fragdepth_or_discard, GL_FALSE };
 	for (int i=0; i<n; ++i) {
@@ -9706,7 +9951,7 @@ GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsi
 	}
 
 	for (int i=1; i<c->programs.size; ++i) {
-		if (c->programs.a[i].deleted && i != c->cur_program) {
+		if (c->programs.a[i].deleted && (GLuint)i != c->cur_program) {
 			c->programs.a[i] = tmp;
 			return i;
 		}
@@ -9716,52 +9961,56 @@ GLuint pglCreateProgram(vert_func vertex_shader, frag_func fragment_shader, GLsi
 	return c->programs.size-1;
 }
 
-void glDeleteProgram(GLuint program)
+// Doesn't really do anything except mark for re-use, you
+// could still use it even if it wasn't current as long as
+// no new program get's assigned to the same spot
+PGLDEF void glDeleteProgram(GLuint program)
 {
+	// This check isn't really necessary since "deleting" only marks it
+	// and CreateProgram will never overwrite the 0/default shader
 	if (!program)
 		return;
 
-	if (program >= c->programs.size) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(program >= c->programs.size, GL_INVALID_VALUE);
 
 	c->programs.a[program].deleted = GL_TRUE;
 }
 
-void glUseProgram(GLuint program)
+PGLDEF void glUseProgram(GLuint program)
 {
-	if (program >= c->programs.size) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	// Not a problem if program is marked "deleted" already
+	PGL_ERR(program >= c->programs.size, GL_INVALID_VALUE);
 
 	c->vs_output.size = c->programs.a[program].vs_output_size;
-	cvec_reserve_float(&c->vs_output.output_buf, c->vs_output.size * PGL_MAX_VERTICES);
+	// c->vs_output.output_buf was pre-allocated to max size needed in init_glContext
+	// otherwise would need to assure it's at least
+	// c->vs_output_size * PGL_MAX_VERTS * sizeof(float) right here
 	c->vs_output.interpolation = c->programs.a[program].interpolation;
 	c->fragdepth_or_discard = c->programs.a[program].fragdepth_or_discard;
 
 	c->cur_program = program;
 }
 
-void pglSetUniform(void* uniform)
+PGLDEF void pglSetUniform(void* uniform)
 {
 	//TODO check for NULL? definitely if I ever switch to storing a local
 	//copy in glProgram
 	c->programs.a[c->cur_program].uniform = uniform;
 }
 
-
-void glBlendFunc(GLenum sfactor, GLenum dfactor)
+PGLDEF void pglSetProgramUniform(GLuint program, void* uniform)
 {
-	if (sfactor < GL_ZERO || sfactor >= NUM_BLEND_FUNCS || dfactor < GL_ZERO || dfactor >= NUM_BLEND_FUNCS) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+	// can set uniform for a "deleted" program ... but maybe I should still check and just
+	// make an exception if it's the current program?
+	PGL_ERR(program >= c->programs.size, GL_INVALID_OPERATION);
 
-		return;
-	}
+	c->programs.a[program].uniform = uniform;
+}
+
+
+PGLDEF void glBlendFunc(GLenum sfactor, GLenum dfactor)
+{
+	PGL_ERR((sfactor < GL_ZERO || sfactor >= NUM_BLEND_FUNCS || dfactor < GL_ZERO || dfactor >= NUM_BLEND_FUNCS), GL_INVALID_ENUM);
 
 	c->blend_sRGB = sfactor;
 	c->blend_sA = sfactor;
@@ -9769,81 +10018,56 @@ void glBlendFunc(GLenum sfactor, GLenum dfactor)
 	c->blend_dA = dfactor;
 }
 
-void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha)
+PGLDEF void glBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha)
 {
-	if (srcRGB < GL_ZERO || srcRGB >= NUM_BLEND_FUNCS ||
-	    dstRGB < GL_ZERO || dstRGB >= NUM_BLEND_FUNCS ||
-	    srcAlpha < GL_ZERO || srcAlpha >= NUM_BLEND_FUNCS ||
-	    dstAlpha < GL_ZERO || dstAlpha >= NUM_BLEND_FUNCS) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+	PGL_ERR((srcRGB < GL_ZERO || srcRGB >= NUM_BLEND_FUNCS ||
+	         dstRGB < GL_ZERO || dstRGB >= NUM_BLEND_FUNCS ||
+	         srcAlpha < GL_ZERO || srcAlpha >= NUM_BLEND_FUNCS ||
+	         dstAlpha < GL_ZERO || dstAlpha >= NUM_BLEND_FUNCS), GL_INVALID_ENUM);
 
-		return;
-	}
 	c->blend_sRGB = srcRGB;
 	c->blend_sA = srcAlpha;
 	c->blend_dRGB = dstRGB;
 	c->blend_dA = dstAlpha;
 }
 
-void glBlendEquation(GLenum mode)
+PGLDEF void glBlendEquation(GLenum mode)
 {
-	if (mode < GL_FUNC_ADD || mode >= NUM_BLEND_EQUATIONS) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((mode < GL_FUNC_ADD || mode >= NUM_BLEND_EQUATIONS), GL_INVALID_ENUM);
 
 	c->blend_eqRGB = mode;
 	c->blend_eqA = mode;
 }
 
-void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha)
+PGLDEF void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha)
 {
-	if (modeRGB < GL_FUNC_ADD || modeRGB >= NUM_BLEND_EQUATIONS ||
-	    modeAlpha < GL_FUNC_ADD || modeAlpha >= NUM_BLEND_EQUATIONS) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((modeRGB < GL_FUNC_ADD || modeRGB >= NUM_BLEND_EQUATIONS ||
+	    modeAlpha < GL_FUNC_ADD || modeAlpha >= NUM_BLEND_EQUATIONS), GL_INVALID_ENUM);
 
 	c->blend_eqRGB = modeRGB;
 	c->blend_eqA = modeAlpha;
 }
 
-void glBlendColor(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha)
+PGLDEF void glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
 	SET_VEC4(c->blend_color, clamp_01(red), clamp_01(green), clamp_01(blue), clamp_01(alpha));
 }
 
-void glLogicOp(GLenum opcode)
+PGLDEF void glLogicOp(GLenum opcode)
 {
-	if (opcode < GL_CLEAR || opcode > GL_INVERT) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((opcode < GL_CLEAR || opcode > GL_INVERT), GL_INVALID_ENUM);
 	c->logic_func = opcode;
 }
 
-void glPolygonOffset(GLfloat factor, GLfloat units)
+PGLDEF void glPolygonOffset(GLfloat factor, GLfloat units)
 {
 	c->poly_factor = factor;
 	c->poly_units = units;
 }
 
-void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
+PGLDEF void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 {
-	// once again why is GLsizei not unsigned?
-	if (width < 0 || height < 0) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-
-		return;
-	}
+	PGL_ERR((width < 0 || height < 0), GL_INVALID_VALUE);
 
 	c->scissor_lx = x;
 	c->scissor_ly = y;
@@ -9858,23 +10082,16 @@ void glScissor(GLint x, GLint y, GLsizei width, GLsizei height)
 	c->uy = MIN(uy, c->back_buffer.h);
 }
 
-void glStencilFunc(GLenum func, GLint ref, GLuint mask)
+#ifndef PGL_NO_STENCIL
+PGLDEF void glStencilFunc(GLenum func, GLint ref, GLuint mask)
 {
-	if (func < GL_LESS || func > GL_NEVER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((func < GL_LESS || func > GL_NEVER), GL_INVALID_ENUM);
 
 	c->stencil_func = func;
 	c->stencil_func_back = func;
 
 	// TODO clamp byte function?
-	if (ref > 255)
-		ref = 255;
-	if (ref < 0)
-		ref = 0;
+	clampi(ref, 0, 255);
 
 	c->stencil_ref = ref;
 	c->stencil_ref_back = ref;
@@ -9883,59 +10100,40 @@ void glStencilFunc(GLenum func, GLint ref, GLuint mask)
 	c->stencil_valuemask_back = mask;
 }
 
-void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
+PGLDEF void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
 {
-	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
-
-	if (face == GL_FRONT_AND_BACK) {
-		glStencilFunc(func, ref, mask);
-		return;
-	}
-
-	if (func < GL_LESS || func > GL_NEVER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((face < GL_FRONT || face > GL_FRONT_AND_BACK), GL_INVALID_ENUM);
+	PGL_ERR((func < GL_LESS || func > GL_NEVER), GL_INVALID_ENUM);
 
 	// TODO clamp byte function?
-	if (ref > 255)
-		ref = 255;
-	if (ref < 0)
-		ref = 0;
+	clampi(ref, 0, 255);
 
+	// Any better way to do this? I don't call glStencilFunc in case
+	// I ever want/need debugging/logging info to show the function call
 	if (face == GL_FRONT) {
 		c->stencil_func = func;
 		c->stencil_ref = ref;
 		c->stencil_valuemask = mask;
+	} else if (face == GL_BACK) {
+		c->stencil_func_back = func;
+		c->stencil_ref_back = ref;
+		c->stencil_valuemask_back = mask;
 	} else {
+		c->stencil_func = func;
+		c->stencil_ref = ref;
+		c->stencil_valuemask = mask;
+
 		c->stencil_func_back = func;
 		c->stencil_ref_back = ref;
 		c->stencil_valuemask_back = mask;
 	}
 }
 
-void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass)
+PGLDEF void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass)
 {
-	// TODO not sure if I should check all parameters first or
-	// allow partial success?
-	//
-	// Also, how best to check when the enums aren't contiguous?  empty switch?
-	// manually checking all enums?
-	if (((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO) ||
-	    ((dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && dpfail != GL_ZERO) ||
-	    ((dppass < GL_INVERT || dppass > GL_DECR_WRAP) && dppass != GL_ZERO)) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
+	PGL_ERR((((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO) ||
+	        ((dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && dpfail != GL_ZERO) ||
+	        ((dppass < GL_INVERT || dppass > GL_DECR_WRAP) && dppass != GL_ZERO)), GL_INVALID_ENUM);
 
 	c->stencil_sfail = sfail;
 	c->stencil_dpfail = dpfail;
@@ -9946,87 +10144,67 @@ void glStencilOp(GLenum sfail, GLenum dpfail, GLenum dppass)
 	c->stencil_dppass_back = dppass;
 }
 
-void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass)
+PGLDEF void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass)
 {
-	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
+	PGL_ERR((face < GL_FRONT || face > GL_FRONT_AND_BACK), GL_INVALID_ENUM);
 
-		return;
-	}
+	PGL_ERR((((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO) ||
+	        ((dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && dpfail != GL_ZERO) ||
+	        ((dppass < GL_INVERT || dppass > GL_DECR_WRAP) && dppass != GL_ZERO)), GL_INVALID_ENUM);
 
-	if (face == GL_FRONT_AND_BACK) {
-		glStencilOp(sfail, dpfail, dppass);
-		return;
-	}
-
-	if (((sfail < GL_INVERT || sfail > GL_DECR_WRAP) && sfail != GL_ZERO) ||
-	    ((dpfail < GL_INVERT || dpfail > GL_DECR_WRAP) && dpfail != GL_ZERO) ||
-	    ((dppass < GL_INVERT || dppass > GL_DECR_WRAP) && dppass != GL_ZERO)) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
 
 	if (face == GL_FRONT) {
 		c->stencil_sfail = sfail;
 		c->stencil_dpfail = dpfail;
 		c->stencil_dppass = dppass;
+	} else if (face == GL_BACK) {
+		c->stencil_sfail_back = sfail;
+		c->stencil_dpfail_back = dpfail;
+		c->stencil_dppass_back = dppass;
 	} else {
+		c->stencil_sfail = sfail;
+		c->stencil_dpfail = dpfail;
+		c->stencil_dppass = dppass;
+
 		c->stencil_sfail_back = sfail;
 		c->stencil_dpfail_back = dpfail;
 		c->stencil_dppass_back = dppass;
 	}
 }
 
-void glClearStencil(GLint s)
+PGLDEF void glClearStencil(GLint s)
 {
 	c->clear_stencil = s & PGL_STENCIL_MASK;
 }
 
-void glStencilMask(GLuint mask)
+PGLDEF void glStencilMask(GLuint mask)
 {
 	c->stencil_writemask = mask;
 	c->stencil_writemask_back = mask;
 }
 
-void glStencilMaskSeparate(GLenum face, GLuint mask)
+PGLDEF void glStencilMaskSeparate(GLenum face, GLuint mask)
 {
-	if (face < GL_FRONT || face > GL_FRONT_AND_BACK) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-
-		return;
-	}
-
-	if (face == GL_FRONT_AND_BACK) {
-		glStencilMask(mask);
-		return;
-	}
+	PGL_ERR((face < GL_FRONT || face > GL_FRONT_AND_BACK), GL_INVALID_ENUM);
 
 	if (face == GL_FRONT) {
 		c->stencil_writemask = mask;
+	} else if (face == GL_BACK) {
+		c->stencil_writemask_back = mask;
 	} else {
+		c->stencil_writemask = mask;
 		c->stencil_writemask_back = mask;
 	}
 }
+#endif
 
 
 // Just wrap my pgl extension getter, unmap does nothing
-void* glMapBuffer(GLenum target, GLenum access)
+PGLDEF void* glMapBuffer(GLenum target, GLenum access)
 {
-	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return NULL;
-	}
+	PGL_ERR_RET_VAL((target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER), GL_INVALID_ENUM, NULL);
 
-	if (access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return NULL;
-	}
+	PGL_ERR_RET_VAL((access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE), GL_INVALID_ENUM, NULL);
 
 	// adjust to access bound_buffers
 	target -= GL_ARRAY_BUFFER;
@@ -10036,14 +10214,10 @@ void* glMapBuffer(GLenum target, GLenum access)
 	return data;
 }
 
-void* glMapNamedBuffer(GLuint buffer, GLenum access)
+PGLDEF void* glMapNamedBuffer(GLuint buffer, GLenum access)
 {
-	// pglGetBufferData will verify buffer is valid
-	if (access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return NULL;
-	}
+	// TODO pglGetBufferData will verify buffer is valid, hmm
+	PGL_ERR_RET_VAL((access != GL_READ_ONLY && access != GL_WRITE_ONLY && access != GL_READ_WRITE), GL_INVALID_ENUM, NULL);
 
 	void* data = NULL;
 	pglGetBufferData(buffer, &data);
@@ -10051,108 +10225,153 @@ void* glMapNamedBuffer(GLuint buffer, GLenum access)
 }
 
 
+#ifndef PGL_EXCLUDE_STUBS
+
 // Stubs to let real OpenGL libs compile with minimal modifications/ifdefs
 // add what you need
 
-void glGenerateMipmap(GLenum target)
+PGLDEF const GLubyte* glGetStringi(GLenum name, GLuint index) { return NULL; }
+
+PGLDEF void glColorMaski(GLuint buf, GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) {}
+
+PGLDEF void glGenerateMipmap(GLenum target)
 {
 	//TODO not implemented, not sure it's worth it.
 	//For example mipmap generation code see
 	//https://github.com/thebeast33/cro_lib/blob/master/cro_mipmap.h
 }
 
-void glGetDoublev(GLenum pname, GLdouble* params) { }
-void glGetInteger64v(GLenum pname, GLint64* params) { }
+PGLDEF void glGetDoublev(GLenum pname, GLdouble* params) { }
+PGLDEF void glGetInteger64v(GLenum pname, GLint64* params) { }
+
+// Drawbuffers
+PGLDEF void glDrawBuffers(GLsizei n, const GLenum* bufs) {}
+PGLDEF void glNamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs) {}
 
 // Framebuffers/Renderbuffers
-void glGenFramebuffers(GLsizei n, GLuint* ids) {}
-void glBindFramebuffer(GLenum target, GLuint framebuffer) {}
-void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers) {}
-void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level) {}
-void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
-void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
-void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer) {}
-GLboolean glIsFramebuffer(GLuint framebuffer) { return GL_FALSE; }
+PGLDEF void glGenFramebuffers(GLsizei n, GLuint* ids) {}
+PGLDEF void glBindFramebuffer(GLenum target, GLuint framebuffer) {}
+PGLDEF void glDeleteFramebuffers(GLsizei n, GLuint* framebuffers) {}
+PGLDEF void glFramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level) {}
+PGLDEF void glFramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
+PGLDEF void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {}
+PGLDEF void glFramebufferTexture3D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint layer) {}
+PGLDEF GLboolean glIsFramebuffer(GLuint framebuffer) { return GL_FALSE; }
 
-void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {}
-void glBindRenderbuffer(GLenum target, GLuint renderbuffer) {}
-void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) {}
-void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height) {}
-GLboolean glIsRenderbuffer(GLuint renderbuffer) { return GL_FALSE; }
+PGLDEF void glFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) {}
+PGLDEF void glNamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer) {}
 
-void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) {}
+PGLDEF void glReadBuffer(GLenum mode) {}
+PGLDEF void glNamedFramebufferReadBuffer(GLuint framebuffer, GLenum mode) {}
+
+PGLDEF void glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {}
+PGLDEF void glBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {}
+
+PGLDEF void glGenRenderbuffers(GLsizei n, GLuint* renderbuffers) {}
+PGLDEF void glBindRenderbuffer(GLenum target, GLuint renderbuffer) {}
+PGLDEF void glDeleteRenderbuffers(GLsizei n, const GLuint* renderbuffers) {}
+PGLDEF void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height) {}
+PGLDEF GLboolean glIsRenderbuffer(GLuint renderbuffer) { return GL_FALSE; }
+
+PGLDEF void glRenderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) {}
+PGLDEF void glNamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) {}
+
+PGLDEF void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) {}
 // Could also return GL_FRAMEBUFFER_UNDEFINED, but then I'd have to add all
 // those enums and really 0 signaling an error makes more sense
-GLenum glCheckFramebufferStatus(GLenum target) { return 0; }
+PGLDEF GLenum glCheckFramebufferStatus(GLenum target) { return 0; }
 
+PGLDEF void glClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {}
+PGLDEF void glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {}
+PGLDEF void glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {}
+PGLDEF void glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {}
+PGLDEF void glClearNamedFramebufferiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLint* value) {}
+PGLDEF void glClearNamedFramebufferuiv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLuint* value) {}
+PGLDEF void glClearNamedFramebufferfv(GLuint framebuffer, GLenum buffer, GLint drawbuffer, const GLfloat* value) {}
+PGLDEF void glClearNamedFramebufferfi(GLuint framebuffer, GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {}
 
+PGLDEF void glGetProgramiv(GLuint program, GLenum pname, GLint* params) { }
+PGLDEF void glGetProgramInfoLog(GLuint program, GLsizei maxLength, GLsizei* length, GLchar* infoLog) { }
+PGLDEF void glAttachShader(GLuint program, GLuint shader) { }
+PGLDEF void glCompileShader(GLuint shader) { }
+PGLDEF void glGetShaderInfoLog(GLuint shader, GLsizei maxLength, GLsizei* length, GLchar* infoLog) { }
+PGLDEF void glLinkProgram(GLuint program) { }
+PGLDEF void glShaderSource(GLuint shader, GLsizei count, const GLchar** string, const GLint* length) { }
+PGLDEF void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) { }
+PGLDEF void glDeleteShader(GLuint shader) { }
+PGLDEF void glDetachShader(GLuint program, GLuint shader) { }
 
-void glGetProgramiv(GLuint program, GLenum pname, GLint* params) { }
-void glGetProgramInfoLog(GLuint program, GLsizei maxLength, GLsizei* length, GLchar* infoLog) { }
-void glAttachShader(GLuint program, GLuint shader) { }
-void glCompileShader(GLuint shader) { }
-void glGetShaderInfoLog(GLuint shader, GLsizei maxLength, GLsizei* length, GLchar* infoLog) { }
-void glLinkProgram(GLuint program) { }
-void glShaderSource(GLuint shader, GLsizei count, const GLchar** string, const GLint* length) { }
-void glGetShaderiv(GLuint shader, GLenum pname, GLint* params) { }
-void glDeleteShader(GLuint shader) { }
-void glDetachShader(GLuint program, GLuint shader) { }
+PGLDEF GLuint glCreateProgram(void) { return 0; }
+PGLDEF GLuint glCreateShader(GLenum shaderType) { return 0; }
+PGLDEF GLint glGetUniformLocation(GLuint program, const GLchar* name) { return 0; }
+PGLDEF GLint glGetAttribLocation(GLuint program, const GLchar* name) { return 0; }
 
-GLuint glCreateProgram() { return 0; }
-GLuint glCreateShader(GLenum shaderType) { return 0; }
-GLint glGetUniformLocation(GLuint program, const GLchar* name) { return 0; }
-GLint glGetAttribLocation(GLuint program, const GLchar* name) { return 0; }
-
-GLboolean glUnmapBuffer(GLenum target) { return GL_TRUE; }
-GLboolean glUnmapNamedBuffer(GLuint buffer) { return GL_TRUE; }
+PGLDEF GLboolean glUnmapBuffer(GLenum target) { return GL_TRUE; }
+PGLDEF GLboolean glUnmapNamedBuffer(GLuint buffer) { return GL_TRUE; }
 
 // TODO
 
-void glActiveTexture(GLenum texture) { }
-void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { }
-void glTextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params) { }
+PGLDEF void glActiveTexture(GLenum texture) { }
+PGLDEF void glTexParameterf(GLenum target, GLenum pname, GLfloat param) {}
+PGLDEF void glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) {}
+PGLDEF void glTexParameteriv(GLenum target, GLenum pname, const GLint* params) {}
 
-void glUniform1f(GLint location, GLfloat v0) { }
-void glUniform2f(GLint location, GLfloat v0, GLfloat v1) { }
-void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) { }
-void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) { }
+PGLDEF void glTextureParameterf(GLuint texture, GLenum pname, GLfloat param) {}
+PGLDEF void glTextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params) {}
+PGLDEF void glTextureParameteriv(GLuint texture, GLenum pname, const GLint* params) {}
 
-void glUniform1i(GLint location, GLint v0) { }
-void glUniform2i(GLint location, GLint v0, GLint v1) { }
-void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) { }
-void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) { }
+// TODO what the heck are these?
+PGLDEF void glTexParameterliv(GLenum target, GLenum pname, const GLint* params) {}
+PGLDEF void glTexParameterluiv(GLenum target, GLenum pname, const GLuint* params) {}
 
-void glUniform1ui(GLuint location, GLuint v0) { }
-void glUniform2ui(GLuint location, GLuint v0, GLuint v1) { }
-void glUniform3ui(GLuint location, GLuint v0, GLuint v1, GLuint v2) { }
-void glUniform4ui(GLuint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3) { }
+PGLDEF void glTextureParameterliv(GLuint texture, GLenum pname, const GLint* params) {}
+PGLDEF void glTextureParameterluiv(GLuint texture, GLenum pname, const GLuint* params) {}
 
-void glUniform1fv(GLint location, GLsizei count, const GLfloat* value) { }
-void glUniform2fv(GLint location, GLsizei count, const GLfloat* value) { }
-void glUniform3fv(GLint location, GLsizei count, const GLfloat* value) { }
-void glUniform4fv(GLint location, GLsizei count, const GLfloat* value) { }
+PGLDEF void glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const GLvoid* data) {}
+PGLDEF void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const GLvoid* data) {}
+PGLDEF void glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const GLvoid* data) {}
 
-void glUniform1iv(GLint location, GLsizei count, const GLint* value) { }
-void glUniform2iv(GLint location, GLsizei count, const GLint* value) { }
-void glUniform3iv(GLint location, GLsizei count, const GLint* value) { }
-void glUniform4iv(GLint location, GLsizei count, const GLint* value) { }
+PGLDEF void glUniform1f(GLint location, GLfloat v0) { }
+PGLDEF void glUniform2f(GLint location, GLfloat v0, GLfloat v1) { }
+PGLDEF void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) { }
+PGLDEF void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) { }
 
-void glUniform1uiv(GLint location, GLsizei count, const GLuint* value) { }
-void glUniform2uiv(GLint location, GLsizei count, const GLuint* value) { }
-void glUniform3uiv(GLint location, GLsizei count, const GLuint* value) { }
-void glUniform4uiv(GLint location, GLsizei count, const GLuint* value) { }
+PGLDEF void glUniform1i(GLint location, GLint v0) { }
+PGLDEF void glUniform2i(GLint location, GLint v0, GLint v1) { }
+PGLDEF void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) { }
+PGLDEF void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) { }
 
-void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
-void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniform1ui(GLint location, GLuint v0) { }
+PGLDEF void glUniform2ui(GLint location, GLuint v0, GLuint v1) { }
+PGLDEF void glUniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2) { }
+PGLDEF void glUniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3) { }
 
+PGLDEF void glUniform1fv(GLint location, GLsizei count, const GLfloat* value) { }
+PGLDEF void glUniform2fv(GLint location, GLsizei count, const GLfloat* value) { }
+PGLDEF void glUniform3fv(GLint location, GLsizei count, const GLfloat* value) { }
+PGLDEF void glUniform4fv(GLint location, GLsizei count, const GLfloat* value) { }
 
+PGLDEF void glUniform1iv(GLint location, GLsizei count, const GLint* value) { }
+PGLDEF void glUniform2iv(GLint location, GLsizei count, const GLint* value) { }
+PGLDEF void glUniform3iv(GLint location, GLsizei count, const GLint* value) { }
+PGLDEF void glUniform4iv(GLint location, GLsizei count, const GLint* value) { }
+
+PGLDEF void glUniform1uiv(GLint location, GLsizei count, const GLuint* value) { }
+PGLDEF void glUniform2uiv(GLint location, GLsizei count, const GLuint* value) { }
+PGLDEF void glUniform3uiv(GLint location, GLsizei count, const GLuint* value) { }
+PGLDEF void glUniform4uiv(GLint location, GLsizei count, const GLuint* value) { }
+
+PGLDEF void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+PGLDEF void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) { }
+
+#endif
 
 
 /*************************************
@@ -10187,7 +10406,7 @@ int clampi(int i, int min, int max)
 
 static int wrap(int i, int size, GLenum mode)
 {
-	int tmp, tmp2;
+	int tmp;
 	switch (mode)
 	{
 	case GL_REPEAT:
@@ -10211,7 +10430,6 @@ static int wrap(int i, int size, GLenum mode)
 	case GL_MIRRORED_REPEAT:
 		if (i < 0) i = -i;
 		tmp = i / size;
-		tmp2 = i / (2*size);  // TODO what was this for?
 		if (tmp % 2)
 			return (size-1) - (i - tmp * size);
 		else
@@ -10230,7 +10448,7 @@ static int wrap(int i, int size, GLenum mode)
 // used in the following 4 texture access functions
 // Not sure if it's actually necessary since wrap() clamps
 #define EPSILON 0.000001
-vec4 texture1D(GLuint tex, float x)
+PGLDEF vec4 texture1D(GLuint tex, float x)
 {
 	int i0, i1;
 
@@ -10276,7 +10494,7 @@ vec4 texture1D(GLuint tex, float x)
 	}
 }
 
-vec4 texture2D(GLuint tex, float x, float y)
+PGLDEF vec4 texture2D(GLuint tex, float x, float y)
 {
 	int i0, j0, i1, j1;
 
@@ -10341,7 +10559,7 @@ vec4 texture2D(GLuint tex, float x, float y)
 	}
 }
 
-vec4 texture3D(GLuint tex, float x, float y, float z)
+PGLDEF vec4 texture3D(GLuint tex, float x, float y, float z)
 {
 	int i0, j0, i1, j1, k0, k1;
 
@@ -10427,7 +10645,7 @@ vec4 texture3D(GLuint tex, float x, float y, float z)
 }
 
 // for now this should work
-vec4 texture2DArray(GLuint tex, float x, float y, int z)
+PGLDEF vec4 texture2DArray(GLuint tex, float x, float y, int z)
 {
 	int i0, j0, i1, j1;
 
@@ -10490,7 +10708,7 @@ vec4 texture2DArray(GLuint tex, float x, float y, int z)
 	}
 }
 
-vec4 texture_rect(GLuint tex, float x, float y)
+PGLDEF vec4 texture_rect(GLuint tex, float x, float y)
 {
 	int i0, j0, i1, j1;
 
@@ -10552,7 +10770,7 @@ vec4 texture_rect(GLuint tex, float x, float y)
 	}
 }
 
-vec4 texture_cubemap(GLuint texture, float x, float y, float z)
+PGLDEF vec4 texture_cubemap(GLuint texture, float x, float y, float z)
 {
 	glTexture* tex = &c->textures.a[texture];
 	Color* texdata = (Color*)tex->data;
@@ -10689,18 +10907,21 @@ vec4 texture_cubemap(GLuint texture, float x, float y, float z)
 //you can use it elsewhere, independently of a glContext
 //etc.
 //
-void pglClearScreen()
+PGLDEF void pglClearScreen(void)
 {
 	memset(c->back_buffer.buf, 255, c->back_buffer.w * c->back_buffer.h * 4);
 }
 
-void pglSetInterp(GLsizei n, GLenum* interpolation)
+PGLDEF void pglSetInterp(GLsizei n, GLenum* interpolation)
 {
 	c->programs.a[c->cur_program].vs_output_size = n;
 	c->vs_output.size = n;
 
 	memcpy(c->programs.a[c->cur_program].interpolation, interpolation, n*sizeof(GLenum));
-	cvec_reserve_float(&c->vs_output.output_buf, n * PGL_MAX_VERTICES);
+
+	// c->vs_output.output_buf was pre-allocated to max size needed in init_glContext
+	// otherwise would need to assure it's at least
+	// c->vs_output_size * PGL_MAX_VERTS * sizeof(float) right here
 
 	//vs_output.interpolation would be already pointing at current program's array
 	//unless the programs array was realloced since the last glUseProgram because
@@ -10715,7 +10936,7 @@ void pglSetInterp(GLsizei n, GLenum* interpolation)
 //TODO
 //pglDrawRect(x, y, w, h)
 //pglDrawPoint(x, y)
-void pglDrawFrame()
+PGLDEF void pglDrawFrame(void)
 {
 	frag_func frag_shader = c->programs.a[c->cur_program].fragment_shader;
 
@@ -10737,29 +10958,18 @@ void pglDrawFrame()
 
 }
 
-void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
+PGLDEF void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage)
 {
-	if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	//TODO check for usage later
+	PGL_UNUSED(usage);
 
-	//check for usage later
+	PGL_ERR((target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER), GL_INVALID_ENUM);
 
 	target -= GL_ARRAY_BUFFER;
-	if (c->bound_buffers[target] == 0) {
-		if (!c->error)
-			c->error = GL_INVALID_OPERATION;
-		return;
-	}
+	PGL_ERR(!c->bound_buffers[target], GL_INVALID_OPERATION);
 
 	// data can't be null for user_owned data
-	if (!data) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
 	// TODO Should I change this in spec functions too?  Or just say don't mix them
 	// otherwise bad things/undefined behavior??
@@ -10785,49 +10995,25 @@ void pglBufferData(GLenum target, GLsizei size, const GLvoid* data, GLenum usage
 //
 // At least the latter part will change if I ever expand internal format
 // support
-void pglTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void pglTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_1D) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	// ignore level and internalformat for now
+	// (the latter is always converted to RGBA32 anyway)
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
+	PGL_ERR(target != GL_TEXTURE_1D, GL_INVALID_ENUM);
+	PGL_ERR(border, GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
 
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 
 	// data can't be null for user_owned data
-	if (!data) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	//ignore level for now
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
 	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
 	c->textures.a[cur_tex].w = width;
-
-	if (type != GL_UNSIGNED_BYTE) {
-
-		return;
-	}
 
 	// TODO see pglBufferData
 	if (!c->textures.a[cur_tex].user_owned)
@@ -10838,55 +11024,29 @@ void pglTexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei wid
 	c->textures.a[cur_tex].user_owned = GL_TRUE;
 }
 
-void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void pglTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
+	// ignore level and internalformat for now
+	// (the latter is always converted to RGBA32 anyway)
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
+
 	// TODO handle cubemap properly
-	if (target != GL_TEXTURE_2D &&
-	    target != GL_TEXTURE_RECTANGLE &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
-	    target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
-	    target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_2D &&
+	         target != GL_TEXTURE_RECTANGLE &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_X &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Y &&
+	         target != GL_TEXTURE_CUBE_MAP_POSITIVE_Z &&
+	         target != GL_TEXTURE_CUBE_MAP_NEGATIVE_Z), GL_INVALID_ENUM);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(border, GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 
 	// data can't be null for user_owned data
-	if (!data) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	//ignore level for now
-
-	//TODO support other types?
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
 	int cur_tex;
 
@@ -10917,12 +11077,8 @@ void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei wid
 		if (!c->textures.a[cur_tex].user_owned)
 			free(c->textures.a[cur_tex].data);
 
-		if (width != height) {
-			//TODO spec says INVALID_VALUE, man pages say INVALID_ENUM ?
-			if (!c->error)
-				c->error = GL_INVALID_VALUE;
-			return;
-		}
+		//TODO spec says INVALID_VALUE, man pages say INVALID_ENUM ?
+		PGL_ERR(width != height, GL_INVALID_VALUE);
 
 		int mem_size = width*height*6 * components;
 		if (c->textures.a[cur_tex].w == 0) {
@@ -10932,8 +11088,7 @@ void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei wid
 		} else if (c->textures.a[cur_tex].w != width) {
 			//TODO spec doesn't say all sides must have same dimensions but it makes sense
 			//and this site suggests it http://www.opengl.org/wiki/Cubemap_Texture
-			if (!c->error)
-				c->error = GL_INVALID_VALUE;
+			PGL_SET_ERR(GL_INVALID_VALUE);
 			return;
 		}
 
@@ -10946,40 +11101,20 @@ void pglTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei wid
 	} //end CUBE_MAP
 }
 
-void pglTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
+PGLDEF void pglTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid* data)
 {
-	if (target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	// ignore level and internalformat for now
+	// (the latter is always converted to RGBA32 anyway)
+	PGL_UNUSED(level);
+	PGL_UNUSED(internalformat);
 
-	if (border) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	if (type != GL_UNSIGNED_BYTE) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
-
-	if (format != GL_RGBA) {
-		if (!c->error)
-			c->error = GL_INVALID_ENUM;
-		return;
-	}
+	PGL_ERR((target != GL_TEXTURE_3D && target != GL_TEXTURE_2D_ARRAY), GL_INVALID_ENUM);
+	PGL_ERR(border, GL_INVALID_VALUE);
+	PGL_ERR(type != GL_UNSIGNED_BYTE, GL_INVALID_ENUM);
+	PGL_ERR(format != GL_RGBA, GL_INVALID_ENUM);
 
 	// data can't be null for user_owned data
-	if (!data) {
-		if (!c->error)
-			c->error = GL_INVALID_VALUE;
-		return;
-	}
-
-	//ignore level for now
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
 	int cur_tex = c->bound_textures[target-GL_TEXTURE_UNBOUND-1];
 
@@ -10996,39 +11131,45 @@ void pglTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei wid
 }
 
 
-void pglGetBufferData(GLuint buffer, GLvoid** data)
+PGLDEF void pglGetBufferData(GLuint buffer, GLvoid** data)
 {
 	// why'd you even call it?
-	if (!data) {
-		if (!c->error) {
-			c->error = GL_INVALID_VALUE;
-		}
-		return;
-	}
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
-	if (buffer && buffer < c->buffers.size && !c->buffers.a[buffer].deleted) {
-		*data = c->buffers.a[buffer].data;
-	} else if (!c->error) {
-		c->error = GL_INVALID_OPERATION; // matching error code of binding invalid buffer
-	}
+	// matching error code of binding invalid buffecr
+	PGL_ERR((!buffer || buffer >= c->buffers.size || c->buffers.a[buffer].deleted),
+	        GL_INVALID_OPERATION);
+
+	*data = c->buffers.a[buffer].data;
 }
 
-void pglGetTextureData(GLuint texture, GLvoid** data)
+PGLDEF void pglGetTextureData(GLuint texture, GLvoid** data)
 {
 	// why'd you even call it?
-	if (!data) {
-		if (!c->error) {
-			c->error = GL_INVALID_VALUE;
-		}
-		return;
-	}
+	PGL_ERR(!data, GL_INVALID_VALUE);
 
-	if (texture < c->textures.size && !c->textures.a[texture].deleted) {
-		*data = c->textures.a[texture].data;
-	} else if (!c->error) {
-		c->error = GL_INVALID_OPERATION; // matching error code of binding invalid buffer
-	}
+	// TODO texture 0?
+	PGL_ERR((texture >= c->textures.size || c->textures.a[texture].deleted), GL_INVALID_OPERATION);
+
+	*data = c->textures.a[texture].data;
 }
+
+// TODO hmm, void*, or u8*, or GLvoid*?
+GLvoid* pglGetBackBuffer(void)
+{
+	return c->back_buffer.buf;
+}
+
+// Assumes buf is the same size/shape as existing buffer (or at least
+// sufficiently large to not cause problems
+PGLDEF void pglSetBackBuffer(GLvoid* backbuf)
+{
+	int w = c->back_buffer.w;
+	int h = c->back_buffer.h;
+	c->back_buffer.buf = (u8*)backbuf;
+	c->back_buffer.lastrow = c->back_buffer.buf + (h-1)*w*sizeof(pix_t);
+}
+
 
 // Not sure where else to put these two functions, they're helper/stopgap
 // measures to deal with PGL only supporting RGBA but they're
@@ -11044,11 +11185,11 @@ void pglGetTextureData(GLuint texture, GLvoid** data)
 // shader that you would have gotten had you used the unsupported
 // format.  Passing in a GL_RGBA where pitch == w*4 reduces to a single memcpy
 //
-// If output is not NULL, it will allocate the output image for you
+// If output is NULL, it will allocate the output image for you
 // pitch is the length of a row in bytes.
 //
 // Returns the resulting packed RGBA image
-u8* convert_format_to_packed_rgba(u8* output, u8* input, int w, int h, int pitch, GLenum format)
+PGLDEF u8* convert_format_to_packed_rgba(u8* output, u8* input, int w, int h, int pitch, GLenum format)
 {
 	int i, j, size = w*h;
 	int rb = pitch;
@@ -11156,7 +11297,7 @@ u8* convert_format_to_packed_rgba(u8* output, u8* input, int w, int h, int pitch
 
 // pass in packed single channel 8 bit image where background=0, foreground=255
 // and get a packed 4-channel rgba image using the colors provided
-u8* convert_grayscale_to_rgba(u8* input, int size, u32 bg_rgba, u32 text_rgba)
+PGLDEF u8* convert_grayscale_to_rgba(u8* input, int size, u32 bg_rgba, u32 text_rgba)
 {
 	float rb, gb, bb, ab, rt, gt, bt, at;
 
@@ -11189,13 +11330,37 @@ u8* convert_grayscale_to_rgba(u8* input, int size, u32 bg_rgba, u32 text_rgba)
 }
 
 
-void put_pixel(Color color, int x, int y)
+PGLDEF void put_pixel(Color color, int x, int y)
 {
-	u32* dest = &((u32*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x];
-	*dest = color.a << c->Ashift | color.r << c->Rshift | color.g << c->Gshift | color.b << c->Bshift;
+	//u32* dest = &((u32*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x];
+	pix_t* dest = &((pix_t*)c->back_buffer.buf)[y*c->back_buffer.w + x];
+	//*dest = (u32)color.a << PGL_ASHIFT | (u32)color.r << PGL_RSHIFT | (u32)color.g << PGL_GSHIFT | (u32)color.b << PGL_BSHIFT;
+	*dest = RGBA_TO_PIXEL(color.r, color.g, color.b, color.a);
 }
 
-void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2)
+PGLDEF void put_pixel_blend(vec4 src, int x, int y)
+{
+	//u32* dest = &((u32*)c->back_buffer.lastrow)[-y*c->back_buffer.w + x];
+	u32* dest = &((u32*)c->back_buffer.buf)[y*c->back_buffer.w + x];
+
+	//Color dest_color = make_Color((*dest & PGL_RMASK) >> PGL_RSHIFT, (*dest & PGL_GMASK) >> PGL_GSHIFT, (*dest & PGL_BMASK) >> PGL_BSHIFT, (*dest & PGL_AMASK) >> PGL_ASHIFT);
+	Color dest_color = PIXEL_TO_COLOR(*dest);
+
+	vec4 dst = Color_to_vec4(dest_color);
+
+	// standard alpha blending xyzw = rgba
+	vec4 final;
+	final.x = src.x * src.w + dst.x * (1.0f - src.w);
+	final.y = src.y * src.w + dst.y * (1.0f - src.w);
+	final.z = src.z * src.w + dst.z * (1.0f - src.w);
+	final.w = src.w + dst.w * (1.0f - src.w);
+
+	Color color = vec4_to_Color(final);
+	//*dest = (u32)color.a << PGL_ASHIFT | (u32)color.r << PGL_RSHIFT | (u32)color.g << PGL_GSHIFT | (u32)color.b << PGL_BSHIFT;
+	*dest = RGBA_TO_PIXEL(color.r, color.g, color.b, color.a);
+}
+
+PGLDEF void put_wide_line_simple(Color the_color, float width, float x1, float y1, float x2, float y2)
 {
 	float tmp;
 
@@ -11266,9 +11431,7 @@ void put_wide_line_simple(Color the_color, float width, float x1, float y1, floa
 	}
 }
 
-/*
-// At least until I can decide how to handle mix_vec4 even when the user defines EXCLUDE_GLSL
-void put_wide_line3(Color color1, Color color2, float width, float x1, float y1, float x2, float y2)
+PGLDEF void put_wide_line(Color color1, Color color2, float width, float x1, float y1, float x2, float y2)
 {
 	vec2 a = { x1, y1 };
 	vec2 b = { x2, y2 };
@@ -11296,7 +11459,7 @@ void put_wide_line3(Color color1, Color color2, float width, float x1, float y1,
 	vec2 c;
 
 	vec2 ab = sub_vec2s(b, a);
-	vec2 ac, bc;
+	vec2 ac;
 
 	float dot_abab = dot_vec2s(ab, ab);
 
@@ -11322,7 +11485,6 @@ void put_wide_line3(Color color1, Color color2, float width, float x1, float y1,
 			// TODO optimize
 			c.x = x;
 			ac = sub_vec2s(c, a);
-			bc = sub_vec2s(c, b);
 			e = dot_vec2s(ac, ab);
 			
 			// c lies past the ends of the segment ab
@@ -11335,16 +11497,15 @@ void put_wide_line3(Color color1, Color color2, float width, float x1, float y1,
 			dist = line_func(&line, c.x, c.y);
 			if (dist*dist < w2) {
 				t = e / dot_abab;
-				out_c = vec4_to_Color(mix_vec4(c1, c2, t));
+				out_c = vec4_to_Color(mixf_vec4(c1, c2, t));
 				put_pixel(out_c, x, y);
 			}
 		}
 	}
 }
-*/
 
 //Should I have it take a glFramebuffer as paramater?
-void put_line(Color the_color, float x1, float y1, float x2, float y2)
+PGLDEF void put_line(Color the_color, float x1, float y1, float x2, float y2)
 {
 	float tmp;
 
@@ -11407,43 +11568,93 @@ void put_line(Color the_color, float x1, float y1, float x2, float y2)
 	}
 }
 
-void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
+
+// can't think of a better/cleaner way to do this than these lines
+#define CLIP_TRIANGLE() \
+	do { \
+	x_min = MIN(p1.x, p2.x); \
+	x_max = MAX(p1.x, p2.x); \
+	y_min = MIN(p1.y, p2.y); \
+	y_max = MAX(p1.y, p2.y); \
+ \
+	x_min = MIN(p3.x, x_min); \
+	x_max = MAX(p3.x, x_max); \
+	y_min = MIN(p3.y, y_min); \
+	y_max = MAX(p3.y, y_max); \
+ \
+	x_min = MAX(c->lx, x_min); \
+	x_max = MIN(c->ux, x_max); \
+	y_min = MAX(c->ly, y_min); \
+	y_max = MIN(c->uy, y_max); \
+	} while (0)
+
+#define MAKE_IMPLICIT_LINES() \
+	do { \
+	l12 = make_Line(p1.x, p1.y, p2.x, p2.y); \
+	l23 = make_Line(p2.x, p2.y, p3.x, p3.y); \
+	l31 = make_Line(p3.x, p3.y, p1.x, p1.y); \
+	} while (0)
+
+#define ANY_COLORS_NOT_WHITE(c) \
+	(c0.r != 255 || c1.r != 255 || c2.r != 255 || \
+	c0.g != 255 || c1.g != 255 || c2.g != 255 || \
+	c0.b != 255 || c1.b != 255 || c2.b != 255)
+
+PGLDEF void put_triangle_uniform(vec4 color, vec2 p1, vec2 p2, vec2 p3)
 {
-	//can't think of a better/cleaner way to do this than these 8 lines
-	float x_min = MIN(floor(p1.x), floor(p2.x));
-	float x_max = MAX(ceil(p1.x), ceil(p2.x));
-	float y_min = MIN(floor(p1.y), floor(p2.y));
-	float y_max = MAX(ceil(p1.y), ceil(p2.y));
-
-	x_min = MIN(floor(p3.x), x_min);
-	x_max = MAX(ceil(p3.x),  x_max);
-	y_min = MIN(floor(p3.y), y_min);
-	y_max = MAX(ceil(p3.y),  y_max);
-
-	x_min = MAX(0, x_min);
-	x_max = MIN(c->back_buffer.w-1, x_max);
-	y_min = MAX(0, y_min);
-	y_max = MIN(c->back_buffer.h-1, y_max);
-
-	//form implicit lines
-	Line l12 = make_Line(p1.x, p1.y, p2.x, p2.y);
-	Line l23 = make_Line(p2.x, p2.y, p3.x, p3.y);
-	Line l31 = make_Line(p3.x, p3.y, p1.x, p1.y);
-
+	float x_min,x_max,y_min,y_max;
+	Line l12, l23, l31;
 	float alpha, beta, gamma;
-	Color c;
 
-	float x, y;
-	//y += 0.5f; //center of pixel
+	CLIP_TRIANGLE();
+	MAKE_IMPLICIT_LINES();
 
-	// TODO(rswinkle): floor(  + 0.5f) like draw_triangle?
-	for (y=y_min; y<=y_max; ++y) {
-		for (x=x_min; x<=x_max; ++x) {
+	x_min = floorf(x_min) + 0.5f;
+	y_min = floorf(y_min) + 0.5f;
+
+	for (float y=y_min; y<y_max; ++y) {
+		for (float x=x_min; x<x_max; ++x) {
 			gamma = line_func(&l12, x, y)/line_func(&l12, p3.x, p3.y);
 			beta = line_func(&l31, x, y)/line_func(&l31, p2.x, p2.y);
 			alpha = 1 - beta - gamma;
 
-			if (alpha >= 0 && beta >= 0 && gamma >= 0)
+			if (alpha >= 0 && beta >= 0 && gamma >= 0) {
+				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
+				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share
+				//edges
+				if ((alpha > 0 || line_func(&l23, p1.x, p1.y) * line_func(&l23, -1, -1) > 0) &&
+				    (beta >  0 || line_func(&l31, p2.x, p2.y) * line_func(&l31, -1, -1) > 0) &&
+				    (gamma > 0 || line_func(&l12, p3.x, p3.y) * line_func(&l12, -1, -1) > 0)) {
+					// blend
+					put_pixel_blend(color, x, y);
+					//put_pixel(color, x, y);
+				}
+			}
+		}
+	}
+}
+
+PGLDEF void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
+{
+	float x_min,x_max,y_min,y_max;
+	Line l12, l23, l31;
+	float alpha, beta, gamma;
+	Color col;
+	col.a = 255; // hmm
+
+	CLIP_TRIANGLE();
+	MAKE_IMPLICIT_LINES();
+
+	x_min = floorf(x_min) + 0.5f;
+	y_min = floorf(y_min) + 0.5f;
+
+	for (float y=y_min; y<y_max; ++y) {
+		for (float x=x_min; x<x_max; ++x) {
+			gamma = line_func(&l12, x, y)/line_func(&l12, p3.x, p3.y);
+			beta = line_func(&l31, x, y)/line_func(&l31, p2.x, p2.y);
+			alpha = 1 - beta - gamma;
+
+			if (alpha >= 0 && beta >= 0 && gamma >= 0) {
 				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
 				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share
 				//edges
@@ -11451,14 +11662,426 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
 				    (beta >  0 || line_func(&l31, p2.x, p2.y) * line_func(&l31, -1, -1) > 0) &&
 				    (gamma > 0 || line_func(&l12, p3.x, p3.y) * line_func(&l12, -1, -1) > 0)) {
 					//calculate interoplation here
-						c.r = alpha*c1.r + beta*c2.r + gamma*c3.r;
-						c.g = alpha*c1.g + beta*c2.g + gamma*c3.g;
-						c.b = alpha*c1.b + beta*c2.b + gamma*c3.b;
-						put_pixel(c, x, y);
+					col.r = alpha*c1.r + beta*c2.r + gamma*c3.r;
+					col.g = alpha*c1.g + beta*c2.g + gamma*c3.g;
+					col.b = alpha*c1.b + beta*c2.b + gamma*c3.b;
+					//col.a = alpha*c1.a + beta*c2.a + gamma*c3.a;
+					//put_pixel_blend(c, x, y);
+					put_pixel(col, x, y);
 				}
+			}
 		}
 	}
 }
+
+PGLDEF void put_triangle_tex(int tex, vec2 uv1, vec2 uv2, vec2 uv3, vec2 p1, vec2 p2, vec2 p3)
+{
+	float x_min,x_max,y_min,y_max;
+	Line l12, l23, l31;
+	float alpha, beta, gamma;
+
+	CLIP_TRIANGLE();
+	MAKE_IMPLICIT_LINES();
+
+#if 0
+	print_vec2(p1, " p1\n");
+	print_vec2(p2, " p2\n");
+	print_vec2(p3, " p3\n");
+	print_vec2(uv1, " uv1\n");
+	print_vec2(uv2, " uv2\n");
+	print_vec2(uv3, " uv3\n");
+#endif
+
+	x_min = floorf(x_min) + 0.5f;
+	y_min = floorf(y_min) + 0.5f;
+	vec2 uv;
+
+	for (float y=y_min; y<y_max; ++y) {
+		for (float x=x_min; x<x_max; ++x) {
+			gamma = line_func(&l12, x, y)/line_func(&l12, p3.x, p3.y);
+			beta = line_func(&l31, x, y)/line_func(&l31, p2.x, p2.y);
+			alpha = 1 - beta - gamma;
+
+			if (alpha >= 0 && beta >= 0 && gamma >= 0) {
+				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
+				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share
+				//edges
+				if ((alpha > 0 || line_func(&l23, p1.x, p1.y) * line_func(&l23, -1, -1) > 0) &&
+				    (beta >  0 || line_func(&l31, p2.x, p2.y) * line_func(&l31, -1, -1) > 0) &&
+				    (gamma > 0 || line_func(&l12, p3.x, p3.y) * line_func(&l12, -1, -1) > 0)) {
+					//calculate interoplation here
+					uv = add_vec2s(scale_vec2(uv1, alpha), scale_vec2(uv2, beta));
+					uv = add_vec2s(uv, scale_vec2(uv3, gamma));
+					put_pixel_blend(texture2D(tex, uv.x, uv.y), x, y);
+				}
+			}
+		}
+	}
+}
+
+PGLDEF void put_triangle_tex_modulate(int tex, vec2 uv1, vec2 uv2, vec2 uv3, vec2 p1, vec2 p2, vec2 p3, Color c1, Color c2, Color c3)
+{
+	float x_min,x_max,y_min,y_max;
+	Line l12, l23, l31;
+	float alpha, beta, gamma;
+	Color col;
+
+	CLIP_TRIANGLE();
+	MAKE_IMPLICIT_LINES();
+
+#if 0
+	print_vec2(p1, " p1\n");
+	print_vec2(p2, " p2\n");
+	print_vec2(p3, " p3\n");
+	print_vec2(uv1, " uv1\n");
+	print_vec2(uv2, " uv2\n");
+	print_vec2(uv3, " uv3\n");
+	print_Color(c1, " c1\n");
+	print_Color(c2, " c2\n");
+	print_Color(c3, " c3\n");
+#endif
+
+	x_min = floorf(x_min) + 0.5f;
+	y_min = floorf(y_min) + 0.5f;
+	vec2 uv;
+
+	for (float y=y_min; y<y_max; ++y) {
+		for (float x=x_min; x<x_max; ++x) {
+			gamma = line_func(&l12, x, y)/line_func(&l12, p3.x, p3.y);
+			beta = line_func(&l31, x, y)/line_func(&l31, p2.x, p2.y);
+			alpha = 1 - beta - gamma;
+
+			if (alpha >= 0 && beta >= 0 && gamma >= 0) {
+				//if it's on the edge (==0), draw if the opposite vertex is on the same side as arbitrary point -1, -1
+				//this is a deterministic way of choosing which triangle gets a pixel for trinagles that share
+				//edges
+				if ((alpha > 0 || line_func(&l23, p1.x, p1.y) * line_func(&l23, -1, -1) > 0) &&
+				    (beta >  0 || line_func(&l31, p2.x, p2.y) * line_func(&l31, -1, -1) > 0) &&
+				    (gamma > 0 || line_func(&l12, p3.x, p3.y) * line_func(&l12, -1, -1) > 0)) {
+					//calculate interoplation here
+					uv = add_vec2s(scale_vec2(uv1, alpha), scale_vec2(uv2, beta));
+					uv = add_vec2s(uv, scale_vec2(uv3, gamma));
+
+					col.r = alpha*c1.r + beta*c2.r + gamma*c3.r;
+					col.g = alpha*c1.g + beta*c2.g + gamma*c3.g;
+					col.b = alpha*c1.b + beta*c2.b + gamma*c3.b;
+					col.a = alpha*c1.a + beta*c2.a + gamma*c3.a;
+					vec4 cv = Color_to_vec4(col);
+					vec4 texcolor = texture2D(tex, uv.x, uv.y);
+					
+					put_pixel_blend(mult_vec4s(cv, texcolor), x, y);
+				}
+			}
+		}
+	}
+}
+
+#define COLOR_EQ(c1, c2) ((c1).r == (c2).r && (c1).g == (c2).g && (c1).b == (c2).b && (c1).a == (c2).a)
+
+
+// TODO Color* or vec4*? float* for xy/uv or vec2*?
+PGLDEF void pgl_draw_geometry_raw(int tex, const float* xy, int xy_stride, const Color* color, int color_stride, const float* uv, int uv_stride, int n_verts, const void* indices, int n_indices, int sz_indices)
+{
+	int i,j;
+	float* x;
+	float* u;
+	int count = indices ? n_indices : n_verts;
+
+	// TODO make PGL_INVALID_VALUE et all?
+	PGL_ERR(!xy, GL_INVALID_VALUE);
+
+	// Matching SDL_RenderGeometryRaw but I feel like they should be able to pass
+	// NULL and just use the texture
+	PGL_ERR(!color, GL_INVALID_VALUE);
+
+
+	PGL_ERR(count % 3, GL_INVALID_VALUE);
+	PGL_ERR(!(sz_indices==1 || sz_indices==2 || sz_indices==4), GL_INVALID_VALUE);
+
+	if (n_verts < 3) return;
+
+	PGL_ASSERT((PGL_MAX_VERTICES * GL_MAX_VERTEX_OUTPUT_COMPONENTS * sizeof(float))/sizeof(pgl_copy_data) >= (size_t)count);
+	// Allow default texture 0?  many implementations return black (0,0,0,1) when sampling
+	// tex 0
+	if (tex > 0) {
+		PGL_ERR(!uv, GL_INVALID_VALUE);
+
+		PGL_ERR((tex >= c->textures.size || c->textures.a[tex].deleted), GL_INVALID_VALUE);
+
+		PGL_ERR(c->textures.a[tex].type != GL_TEXTURE_2D-(GL_TEXTURE_UNBOUND+1), GL_INVALID_OPERATION);
+
+		pgl_copy_data* verts = (pgl_copy_data*)&c->vs_output.output_buf[0];
+		for (i=0; i<count; ++i) {
+			if (sz_indices == 1) j = ((GLubyte*)indices)[i];
+			else if (sz_indices == 2) j = ((GLushort*)indices)[i];
+			else if (sz_indices == 4) j = ((GLuint*)indices)[i];
+			else j = i;
+
+			x = (float*)((u8*)xy + j*xy_stride);
+			u = (float*)((u8*)uv + j*uv_stride);
+
+			verts[i].c = *(Color*)((u8*)color + j*color_stride);
+
+			// TODO convert to ints here for efficiency or leave floats for
+			// flexibility/subpixel accuracy?
+			verts[i].src.x = u[0];
+			verts[i].src.y = u[1];
+
+			// scale?
+			verts[i].dst.x = x[0];
+			verts[i].dst.y = x[1];
+		}
+
+		vec4 tex_color;
+		pgl_copy_data* p = verts;
+		int is_uniform = GL_FALSE;
+		int has_modulation = GL_FALSE;
+		int tex_uniform = GL_FALSE;
+		for (i=0; i<count; i+=3, p+=3) {
+			is_uniform = (COLOR_EQ(p[0].c, p[1].c) && COLOR_EQ(p[1].c, p[2].c));
+			if (is_uniform) {
+				has_modulation = (p[0].c.r != 255 || p[0].c.g != 255 || p[0].c.b != 255 || p[0].c.a != 255);
+			} else {
+				has_modulation = GL_TRUE;
+			}
+			tex_uniform = (equal_vec2s(p[0].src, p[1].src) && equal_vec2s(p[1].src, p[2].src));
+			if (tex_uniform) tex_color = texture2D(tex, p[0].src.x, p[0].src.y);
+
+			if (has_modulation) {
+				if (is_uniform) {
+					if (tex_uniform) {
+						// uniform color triangle, likely uniform color rect
+						vec4 color = mult_vec4s(tex_color, Color_to_vec4(p[0].c));
+						put_triangle_uniform(color, p[0].dst, p[1].dst, p[2].dst);
+					} else {
+						// need another variant that takes a single color so only
+						// interpolates uv
+						put_triangle_tex_modulate(tex, p[0].src, p[1].src, p[2].src, p[0].dst, p[1].dst, p[2].dst, p[0].c, p[1].c, p[2].c);
+					}
+				} else {
+					put_triangle_tex_modulate(tex, p[0].src, p[1].src, p[2].src, p[0].dst, p[1].dst, p[2].dst, p[0].c, p[1].c, p[2].c);
+				}
+			} else {
+				if (tex_uniform) {
+					// uniform color triangle, likely uniform color rect
+					put_triangle_uniform(tex_color, p[0].dst, p[1].dst, p[2].dst);
+				} else {
+					put_triangle_tex(tex, p[0].src, p[1].src, p[2].src, p[0].dst, p[1].dst, p[2].dst);
+				}
+			}
+		}
+	} else {
+		pgl_fill_data* verts = (pgl_fill_data*)&c->vs_output.output_buf[0];
+		for (i=0; i<count; ++i) {
+			if (sz_indices == 1) j = ((GLubyte*)indices)[i];
+			else if (sz_indices == 2) j = ((GLushort*)indices)[i];
+			else if (sz_indices == 4) j = ((GLuint*)indices)[i];
+			else j = i;
+
+			x = (float*)((u8*)xy + j*xy_stride);
+			verts[i].c = *(Color*)((u8*)color + j*color_stride);
+
+			// scale?
+			verts[i].dst.x = x[0];
+			verts[i].dst.y = x[1];
+		}
+
+		pgl_fill_data* p = verts;
+		for (i=0; i<count; i+=3, p+=3) {
+			put_triangle(p[0].c, p[1].c, p[2].c, p[0].dst, p[1].dst, p[2].dst);
+		}
+	}
+}
+
+
+
+#define plot(X,Y,D) do{ c.w = (D); put_pixel_blend(c, X, Y); } while (0)
+
+#define ipart_(X) ((int)(X))
+#define round_(X) ((int)(((float)(X))+0.5f))
+#define fpart_(X) (((float)(X))-(float)ipart_(X))
+#define rfpart_(X) (1.0f-fpart_(X))
+
+#define swap_(a, b) do{ __typeof__(a) tmp;  tmp = a; a = b; b = tmp; } while(0)
+PGLDEF void put_aa_line(vec4 c, float x1, float y1, float x2, float y2)
+{
+	float dx = x2 - x1;
+	float dy = y2 - y1;
+	if (fabs(dx) > fabs(dy)) {
+		if (x2 < x1) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+		}
+		float gradient = dy / dx;
+		float xend = round_(x1);
+		float yend = y1 + gradient*(xend - x1);
+		float xgap = rfpart_(x1 + 0.5);
+		int xpxl1 = xend;
+		int ypxl1 = ipart_(yend);
+		plot(xpxl1, ypxl1, rfpart_(yend)*xgap);
+		plot(xpxl1, ypxl1+1, fpart_(yend)*xgap);
+		printf("xgap = %f\n", xgap);
+		printf("%f %f\n", rfpart_(yend), fpart_(yend));
+		printf("%f %f\n", rfpart_(yend)*xgap, fpart_(yend)*xgap);
+		float intery = yend + gradient;
+
+		xend = round_(x2);
+		yend = y2 + gradient*(xend - x2);
+		xgap = fpart_(x2+0.5);
+		int xpxl2 = xend;
+		int ypxl2 = ipart_(yend);
+		plot(xpxl2, ypxl2, rfpart_(yend) * xgap);
+		plot(xpxl2, ypxl2 + 1, fpart_(yend) * xgap);
+
+		int x;
+		for(x=xpxl1+1; x < xpxl2; x++) {
+			plot(x, ipart_(intery), rfpart_(intery));
+			plot(x, ipart_(intery) + 1, fpart_(intery));
+			intery += gradient;
+		}
+	} else {
+		if ( y2 < y1 ) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+		}
+		float gradient = dx / dy;
+		float yend = round_(y1);
+		float xend = x1 + gradient*(yend - y1);
+		float ygap = rfpart_(y1 + 0.5);
+		int ypxl1 = yend;
+		int xpxl1 = ipart_(xend);
+		plot(xpxl1, ypxl1, rfpart_(xend)*ygap);
+		plot(xpxl1 + 1, ypxl1, fpart_(xend)*ygap);
+		float interx = xend + gradient;
+
+		yend = round_(y2);
+		xend = x2 + gradient*(yend - y2);
+		ygap = fpart_(y2+0.5);
+		int ypxl2 = yend;
+		int xpxl2 = ipart_(xend);
+		plot(xpxl2, ypxl2, rfpart_(xend) * ygap);
+		plot(xpxl2 + 1, ypxl2, fpart_(xend) * ygap);
+
+		int y;
+		for(y=ypxl1+1; y < ypxl2; y++) {
+			plot(ipart_(interx), y, rfpart_(interx));
+			plot(ipart_(interx) + 1, y, fpart_(interx));
+			interx += gradient;
+		}
+	}
+}
+
+
+PGLDEF void put_aa_line_interp(vec4 c1, vec4 c2, float x1, float y1, float x2, float y2)
+{
+	vec4 c;
+	float t;
+
+	float dx = x2 - x1;
+	float dy = y2 - y1;
+
+	if (fabs(dx) > fabs(dy)) {
+		if (x2 < x1) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+			swap_(c1, c2);
+		}
+
+		vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+		vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+		float line_length_squared = length_vec2(sub_p2p1);
+		line_length_squared *= line_length_squared;
+
+		c = c1;
+
+		float gradient = dy / dx;
+		float xend = round_(x1);
+		float yend = y1 + gradient*(xend - x1);
+		float xgap = rfpart_(x1 + 0.5);
+		int xpxl1 = xend;
+		int ypxl1 = ipart_(yend);
+		plot(xpxl1, ypxl1, rfpart_(yend)*xgap);
+		plot(xpxl1, ypxl1+1, fpart_(yend)*xgap);
+		printf("xgap = %f\n", xgap);
+		printf("%f %f\n", rfpart_(yend), fpart_(yend));
+		printf("%f %f\n", rfpart_(yend)*xgap, fpart_(yend)*xgap);
+		float intery = yend + gradient;
+
+		c = c2;
+		xend = round_(x2);
+		yend = y2 + gradient*(xend - x2);
+		xgap = fpart_(x2+0.5);
+		int xpxl2 = xend;
+		int ypxl2 = ipart_(yend);
+		plot(xpxl2, ypxl2, rfpart_(yend) * xgap);
+		plot(xpxl2, ypxl2 + 1, fpart_(yend) * xgap);
+
+		int x;
+		for(x=xpxl1+1; x < xpxl2; x++) {
+			pr.x = x;
+			pr.y = intery;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			c = mixf_vec4(c1, c2, t);
+
+			plot(x, ipart_(intery), rfpart_(intery));
+			plot(x, ipart_(intery) + 1, fpart_(intery));
+			intery += gradient;
+		}
+	} else {
+		if ( y2 < y1 ) {
+			swap_(x1, x2);
+			swap_(y1, y2);
+			swap_(c1, c2);
+		}
+
+		vec2 p1 = { x1, y1 }, p2 = { x2, y2 };
+		vec2 pr, sub_p2p1 = sub_vec2s(p2, p1);
+		float line_length_squared = length_vec2(sub_p2p1);
+		line_length_squared *= line_length_squared;
+
+		c = c1;
+
+		float gradient = dx / dy;
+		float yend = round_(y1);
+		float xend = x1 + gradient*(yend - y1);
+		float ygap = rfpart_(y1 + 0.5);
+		int ypxl1 = yend;
+		int xpxl1 = ipart_(xend);
+		plot(xpxl1, ypxl1, rfpart_(xend)*ygap);
+		plot(xpxl1 + 1, ypxl1, fpart_(xend)*ygap);
+		float interx = xend + gradient;
+
+
+		c = c2;
+		yend = round_(y2);
+		xend = x2 + gradient*(yend - y2);
+		ygap = fpart_(y2+0.5);
+		int ypxl2 = yend;
+		int xpxl2 = ipart_(xend);
+		plot(xpxl2, ypxl2, rfpart_(xend) * ygap);
+		plot(xpxl2 + 1, ypxl2, fpart_(xend) * ygap);
+
+		int y;
+		for(y=ypxl1+1; y < ypxl2; y++) {
+			pr.x = interx;
+			pr.y = y;
+			t = dot_vec2s(sub_vec2s(pr, p1), sub_p2p1) / line_length_squared;
+			c = mixf_vec4(c1, c2, t);
+
+			plot(ipart_(interx), y, rfpart_(interx));
+			plot(ipart_(interx) + 1, y, fpart_(interx));
+			interx += gradient;
+		}
+	}
+}
+
+
+#undef swap_
+#undef plot
+#undef ipart_
+#undef fpart_
+#undef round_
+#undef rfpart_
 
 
 
@@ -11472,17 +12095,21 @@ void put_triangle(Color c1, Color c2, Color c3, vec2 p1, vec2 p2, vec2 p3)
 // Identity Shader, no transformation, uniform color
 static void pgl_identity_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(vs_output);
+	PGL_UNUSED(uniforms);
 	builtins->gl_Position = vertex_attribs[PGL_ATTR_VERT];
 }
 
 static void pgl_identity_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(fs_input);
 	builtins->gl_FragColor = ((pgl_uniforms*)uniforms)->color;
 }
 
 // Flat Shader, Applies the uniform model view matrix transformation, uniform color
 static void flat_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(vs_output);
 	builtins->gl_Position = mult_mat4_vec4(*((mat4*)uniforms), vertex_attribs[PGL_ATTR_VERT]);
 }
 
@@ -11498,6 +12125,7 @@ static void pgl_shaded_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtin
 
 static void pgl_shaded_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 {
+	PGL_UNUSED(uniforms);
 	builtins->gl_FragColor = ((vec4*)fs_input)[0];
 }
 
@@ -11690,7 +12318,7 @@ static void pgl_tex_pnt_light_diff_fs(float* fs_input, Shader_Builtins* builtins
 }
 
 
-void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS])
+PGLDEF void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS])
 {
 	pgl_prog_info std_shaders[PGL_NUM_SHADERS] =
 	{
@@ -11717,22 +12345,21 @@ void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS])
 
 
 #undef PORTABLEGL_IMPLEMENTATION
-#undef CVECTOR_float_IMPLEMENTATION
 #endif
 
 #ifdef PGL_PREFIX_TYPES
 #undef vec2
 #undef vec3
 #undef vec4
-#undef dvec2
-#undef dvec3
-#undef dvec4
 #undef ivec2
 #undef ivec3
 #undef ivec4
 #undef uvec2
 #undef uvec3
 #undef uvec4
+#undef bvec2
+#undef bvec3
+#undef bvec4
 #undef mat2
 #undef mat3
 #undef mat4
@@ -11742,18 +12369,12 @@ void pgl_init_std_shaders(GLuint programs[PGL_NUM_SHADERS])
 #endif
 
 #ifdef PGL_PREFIX_GLSL
-#undef mix
-#undef radians
-#undef degrees
 #undef smoothstep
 #undef clamp_01
 #undef clamp
 #undef clampi
 
 #elif defined(PGL_SUFFIX_GLSL)
-#undef mix
-#undef radians
-#undef degrees
 #undef smoothstep
 #undef clamp_01
 #undef clamp

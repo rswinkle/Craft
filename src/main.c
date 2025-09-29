@@ -2817,7 +2817,7 @@ void create_window() {
 
 	g->bbufpix = NULL; // should already be NULL since global/static but meh
 
-	if (!init_glContext(&g->context, &g->bbufpix, WINDOW_WIDTH, WINDOW_HEIGHT, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)) {
+	if (!init_glContext(&g->context, &g->bbufpix, WINDOW_WIDTH, WINDOW_HEIGHT)) {
 		puts("Failed to initialize glContext");
 		cleanup();
 		exit(0);

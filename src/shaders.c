@@ -1,5 +1,6 @@
 
 #define PORTABLEGL_IMPLEMENTATION
+#define PGL_ARGB32
 #include "shaders.h"
 
 // Could/should just use the default shaders in PortableGL for lines
@@ -127,7 +128,7 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	vec3 sky_color = vec4_to_vec3(texture2D(u->sky_tex, u->timer, fog_height));
 
 	// TODO mix
-	color = mix_vec3(color, sky_color, fog_factor);
+	color = mixf_vec3(color, sky_color, fog_factor);
 	builtins->gl_FragColor = make_vec4(color.x, color.y, color.z, 1.0);
 }
 
