@@ -6,7 +6,7 @@
 // Could/should just use the default shaders in PortableGL for lines
 void line_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, void* uniforms)
 {
-	builtins->gl_Position = mult_mat4_vec4(*((mat4*)uniforms), vertex_attribs[0]);
+	builtins->gl_Position = mult_m4_v4(*((mat4*)uniforms), vertex_attribs[0]);
 }
 
 void line_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
@@ -44,7 +44,7 @@ void block_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins,
 	My_Uniforms* u = uniforms;
 
 	vec4 pos = vertex_attribs[0];
-	builtins->gl_Position = mult_mat4_vec4(u->matrix, pos);
+	builtins->gl_Position = mult_m4_v4(u->matrix, pos);
 
 	// outputs, to assign to vs_output
 	vec4 uv = vertex_attribs[2];
@@ -56,9 +56,9 @@ void block_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins,
 	float fragment_light = uv.w;
 	vs_output[3] = fragment_light;
 
-	const vec3 light_direction = norm_vec3(make_vec3(-1.0, 1.0, -1.0));
+	const vec3 light_direction = norm_v3(make_v3(-1.0, 1.0, -1.0));
 	vec3 normal = *(vec3*)&vertex_attribs[1];
-	float tmp = dot_vec3s(normal, light_direction);  // avoid macro duplication
+	float tmp = dot_v3s(normal, light_direction);  // avoid macro duplication
 	float diffuse = MAX(0.0, tmp);
 	vs_output[6] = diffuse;
 
@@ -68,11 +68,11 @@ void block_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins,
 		fog_factor = 0.0;
 		fog_height = 0.0;
 	} else {
-		float camera_distance = distance_vec3(u->camera, make_vec3(pos.x, pos.y, pos.z));
+		float camera_distance = distance_v3(u->camera, make_v3(pos.x, pos.y, pos.z));
 		fog_factor = pow(clamp(camera_distance / u->fog_distance, 0.0, 1.0), 4.0);
 		float dy = pos.y - u->camera.y;
 		// TODO
-		float dx = distance_vec2(make_vec2(pos.x, pos.z), make_vec2(u->camera.x, u->camera.z));
+		float dx = distance_v2(make_v2(pos.x, pos.z), make_v2(u->camera.x, u->camera.z));
 		fog_height = (atan2f(dy, dx) + RM_PI / 2) / RM_PI;
 	}
 	vs_output[4] = fog_factor;
@@ -95,12 +95,12 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	// TODO add vector conversion functions to crsw_math
 	vec4 tcolor = texture2D(u->block_tex, fragment_uv.x, fragment_uv.y);
 	vec3 color = { tcolor.x, tcolor.y, tcolor.z };
-	if (equal_vec3s(color, make_vec3(1.0, 0.0, 1.0))) {
+	if (equal_v3s(color, make_v3(1.0, 0.0, 1.0))) {
 		//printf("should discard\n");
 		builtins->discard = GL_TRUE;
 		return;
 	}
-	int cloud = equal_vec3s(color, make_vec3(1.0,1.0,1.0));
+	int cloud = equal_v3s(color, make_v3(1.0,1.0,1.0));
 	if (cloud && u->ortho) {
 		builtins->discard = GL_TRUE;
 		return;
@@ -118,18 +118,18 @@ void block_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 	vec3 light_color = { tmp, tmp, tmp };
 	vec3 ambient = light_color;
 
-	vec3 light = add_vec3s(ambient, scale_vec3(light_color, df));
+	vec3 light = add_v3s(ambient, scale_v3(light_color, df));
 
 	vec3 cl_ao = { color.x*light.x*ao, color.y*light.y*ao, color.z*light.z*ao };
 	// TODO match GLSL where min and max are vec3's as well so you can have different
 	// min/max for each field?
-	color = clamp_vec3(cl_ao, 0.0f, 1.0f);
+	color = clamp_v3(cl_ao, 0.0f, 1.0f);
 
-	vec3 sky_color = vec4_to_vec3(texture2D(u->sky_tex, u->timer, fog_height));
+	vec3 sky_color = v4_to_v3(texture2D(u->sky_tex, u->timer, fog_height));
 
 	// TODO mix
-	color = mixf_vec3(color, sky_color, fog_factor);
-	builtins->gl_FragColor = make_vec4(color.x, color.y, color.z, 1.0);
+	color = mixf_v3(color, sky_color, fog_factor);
+	builtins->gl_FragColor = make_v4(color.x, color.y, color.z, 1.0);
 }
 
 
@@ -140,7 +140,7 @@ void sky_vs(float* vs_output, vec4* vertex_attribs, Shader_Builtins* builtins, v
 
 	//print_mat4(u->matrix, "\n");
 	//print_vec4(vertex_attribs[0], "\n");
-	builtins->gl_Position = mult_mat4_vec4(u->matrix, vertex_attribs[0]);
+	builtins->gl_Position = mult_m4_v4(u->matrix, vertex_attribs[0]);
 
 	vec2 fragment_uv = *(vec2*)&vertex_attribs[2];
 	*(vec2*)vs_output = fragment_uv;
@@ -170,7 +170,7 @@ void text_fs(float* fs_input, Shader_Builtins* builtins, void* uniforms)
 
 	vec4 color = texture2D(u->sampler, fragment_uv.x, fragment_uv.y);
 	if (u->is_sign) {
-		if (equal_vec4s(color, ones)) {
+		if (equal_v4s(color, ones)) {
 			builtins->discard = GL_TRUE;
 			return;
 		}

@@ -1646,7 +1646,7 @@ int render_chunks(Attrib *attrib, Player *player) {
     // PGL mat4 is by default column major like his even though I prefer row
     // major like math/textbooks
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.camera = make_vec3(s->x, s->y, s->z);
+    g->uniforms.camera = make_v3(s->x, s->y, s->z);
     g->uniforms.sampler = attrib->sampler;
     g->uniforms.daylight = light;
     g->uniforms.fog_distance = g->render_radius * CHUNK_SIZE;
@@ -1759,7 +1759,7 @@ void render_players(Attrib *attrib, Player *player) {
     glUseProgram(attrib->program);
 
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.camera = make_vec3(s->x, s->y, s->z);
+    g->uniforms.camera = make_v3(s->x, s->y, s->z);
     g->uniforms.sampler = attrib->sampler;
     //g->uniforms.sky_sampler = attrib->extra1;
     //g->uniforms.daylight = light;
@@ -1838,7 +1838,7 @@ void render_item(Attrib *attrib) {
     glUseProgram(attrib->program);
 
     memcpy(g->uniforms.matrix, matrix, sizeof(matrix));
-    g->uniforms.camera = make_vec3(0, 0, 5);
+    g->uniforms.camera = make_v3(0, 0, 5);
     //g->uniforms.sampler = block_tex;
     g->uniforms.timer = time_of_day();
 
